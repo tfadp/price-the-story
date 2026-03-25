@@ -6,7 +6,7 @@ results on failure rather than crashing the pipeline.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 from typing_extensions import TypedDict
 
 

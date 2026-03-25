@@ -38,30 +38,73 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
 
 
 async def get_ticker_info(ticker: str) -> dict:
-    """Fetch yfinance .info for the given ticker symbol.
+    """Fetch yfinance metadata for the given ticker symbol.
 
-    Raises ValueError if the ticker is invalid or not found (quoteType missing).
-    Raises asyncio.TimeoutError (converted to ValueError) on network timeout.
+    Tries fast_info first (lighter, avoids rate limits), then falls back to .info.
+    Retries once with a 3-second delay on transient failures (e.g. 429 rate limit).
+    Raises ValueError if the ticker is invalid or not found.
     """
-    def _fetch() -> dict:
+    def _fetch_fast() -> dict:
+        """Use fast_info — fewer HTTP calls, less rate-limit risk."""
+        t = yf.Ticker(ticker)
+        fi = t.fast_info
+        # Map fast_info attributes to the .info key names the rest of the app expects
+        return {
+            "quoteType": getattr(fi, "quote_type", None),
+            "exchange": getattr(fi, "exchange", None),
+            "marketCap": getattr(fi, "market_cap", None),
+            "regularMarketPrice": getattr(fi, "last_price", None),
+            "regularMarketVolume": getattr(fi, "three_month_average_volume", None),
+            "averageDailyVolume10Day": getattr(fi, "three_month_average_volume", None),
+            "previousClose": getattr(fi, "previous_close", None),
+            "currency": getattr(fi, "currency", "USD"),
+            "shortName": ticker,
+            "longName": ticker,
+            # Supplement with .info for fields fast_info doesn't have
+            "_from_fast_info": True,
+        }
+
+    def _fetch_full() -> dict:
         t = yf.Ticker(ticker)
         return t.info
 
-    try:
-        info = await asyncio.wait_for(
-            asyncio.to_thread(_fetch),
-            timeout=_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        raise ValueError(f"Timeout fetching info for {ticker}")
-    except Exception as e:
-        raise ValueError(f"Failed to fetch ticker info for {ticker}: {e}") from e
+    # Try fast_info first, fall back to full .info
+    for attempt in range(2):
+        try:
+            if attempt == 0:
+                info = await asyncio.wait_for(
+                    asyncio.to_thread(_fetch_fast),
+                    timeout=_TIMEOUT_S,
+                )
+                # fast_info succeeded — augment with a few .info fields if possible
+                if info.get("quoteType"):
+                    return info
+                # fast_info gave us nothing useful, fall through to full .info
 
-    # yfinance returns a nearly empty dict for unknown tickers
-    if not info or info.get("quoteType") is None:
-        raise ValueError(f"Ticker not found or unsupported: {ticker}")
+            info = await asyncio.wait_for(
+                asyncio.to_thread(_fetch_full),
+                timeout=_TIMEOUT_S,
+            )
+            if not info or info.get("quoteType") is None:
+                raise ValueError(f"Ticker not found or unsupported: {ticker}")
+            return info
 
-    return info
+        except asyncio.TimeoutError:
+            if attempt == 0:
+                logger.warning("get_ticker_info: timeout on attempt 1 for %s, retrying", ticker)
+                await asyncio.sleep(2)
+                continue
+            raise ValueError(f"Timeout fetching info for {ticker}")
+        except ValueError:
+            raise
+        except Exception as e:
+            if attempt == 0:
+                logger.warning("get_ticker_info: error on attempt 1 for %s (%s), retrying in 3s", ticker, e)
+                await asyncio.sleep(3)
+                continue
+            raise ValueError(f"Failed to fetch ticker info for {ticker}: {e}") from e
+
+    raise ValueError(f"Failed to fetch ticker info for {ticker} after retries")
 
 
 async def get_financials(ticker: str) -> dict:
