@@ -2,9 +2,14 @@
 Thin async wrapper around yfinance (which is synchronous).
 All calls use asyncio.to_thread so they don't block the event loop.
 Every call is wrapped in asyncio.wait_for with a 10-second timeout.
+
+yfinance is a scraper — it has no official API. Yahoo Finance rate-limits
+aggressively during development (many calls in a short window). In normal
+use (one analysis at a time), this is not an issue.
 """
 import asyncio
 import logging
+import requests
 from typing import Optional
 
 import pandas as pd
@@ -13,7 +18,20 @@ import yfinance as yf
 logger = logging.getLogger(__name__)
 
 # How long we'll wait for any yfinance network call before giving up
-_TIMEOUT_S = 10
+_TIMEOUT_S = 15
+
+# Use a persistent session with browser-like headers to reduce rate limiting
+_SESSION = requests.Session()
+_SESSION.headers.update({
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+})
+yf.set_tz_cache_location("/tmp/yfinance_tz_cache")
 
 
 def _df_to_records(df: pd.DataFrame) -> list[dict]:
@@ -46,7 +64,7 @@ async def get_ticker_info(ticker: str) -> dict:
     """
     def _fetch_fast() -> dict:
         """Use fast_info — fewer HTTP calls, less rate-limit risk."""
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         fi = t.fast_info
         # Map fast_info attributes to the .info key names the rest of the app expects
         return {
@@ -65,7 +83,7 @@ async def get_ticker_info(ticker: str) -> dict:
         }
 
     def _fetch_full() -> dict:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         return t.info
 
     # Try fast_info first, fall back to full .info
@@ -114,7 +132,7 @@ async def get_financials(ticker: str) -> dict:
     Returns empty lists for each on failure (non-critical).
     """
     def _fetch() -> dict:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         return {
             "income_stmt": t.financials,
             "balance_sheet": t.balance_sheet,
@@ -146,7 +164,7 @@ async def get_analyst_data(ticker: str) -> dict:
     Returns an empty dict on failure (non-critical).
     """
     def _fetch() -> dict:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         recommendations = t.recommendations
         earnings_estimate = t.earnings_estimate
         revenue_estimate = t.revenue_estimate
@@ -219,7 +237,7 @@ async def get_price_history(ticker: str, period: str = "10y") -> dict:
     Returns {"history": []} on failure (non-critical).
     """
     def _fetch() -> pd.DataFrame:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         return t.history(period=period)
 
     try:
@@ -257,7 +275,7 @@ async def get_current_price(ticker: str) -> float:
     Raises ValueError if price is unavailable.
     """
     def _fetch() -> float:
-        t = yf.Ticker(ticker)
+        t = yf.Ticker(ticker, session=_SESSION)
         info = t.info
         # Prefer regularMarketPrice, fall back to previousClose
         price = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")

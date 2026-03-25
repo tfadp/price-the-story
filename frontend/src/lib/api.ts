@@ -35,10 +35,24 @@ export async function analyzeTickerStream(
     }
   });
 
-  eventSource.addEventListener('error', () => {
+  // Custom 'error' event emitted by the backend when analysis fails
+  eventSource.addEventListener('error', (e: MessageEvent) => {
     eventSource.close();
-    onError('Connection to analysis server lost. Is the backend running?');
+    try {
+      const data = JSON.parse(e.data);
+      onError(data.detail || 'Analysis failed');
+    } catch {
+      // Native EventSource onerror fires with no data — backend is unreachable
+      onError('Cannot reach the backend. Make sure it is running on port 8000.');
+    }
   });
+
+  // Native onerror fires when the EventSource connection itself fails
+  eventSource.onerror = () => {
+    if (eventSource.readyState === EventSource.CLOSED) return; // already handled above
+    eventSource.close();
+    onError('Cannot reach the backend. Make sure it is running on port 8000.');
+  };
 }
 
 export async function analyzeTicker(

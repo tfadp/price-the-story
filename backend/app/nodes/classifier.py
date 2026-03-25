@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 # Exchanges we consider "US-based" for v1
 _US_EXCHANGES = {"NMS", "NYQ", "NGM", "ASE", "PCX", "BTS", "NAS"}
 
-# Max wall-clock time for the entire classifier node
-_NODE_TIMEOUT_S = 5
+# Max wall-clock time for the entire classifier node.
+# Must be longer than get_ticker_info's retry window (2 attempts × ~8s each = ~20s).
+_NODE_TIMEOUT_S = 30
 
 
 async def _classify(state: GraphState) -> GraphState:
