@@ -128,7 +128,14 @@ async def run(state: GraphState) -> GraphState:
             "ttl_remaining_s": None,
         }
 
-    return state
+    # Return only the keys this node writes — avoids LangGraph InvalidUpdateError
+    # when parallel nodes each try to update the same state keys.
+    return {
+        "macro": state.get("macro"),
+        "section_statuses": {
+            "macro": state.get("section_statuses", {}).get("macro", {}),
+        },
+    }
 
 
 def _build_scenario_impacts(regime: str) -> list[dict]:

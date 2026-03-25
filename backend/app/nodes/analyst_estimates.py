@@ -45,7 +45,13 @@ async def run(state: GraphState) -> GraphState:
                 "cached": False,
                 "ttl_remaining_s": None,
             }
-            return state
+            # Return only the keys this node writes — avoids LangGraph InvalidUpdateError
+            return {
+                "analyst_estimates": state["analyst_estimates"],
+                "section_statuses": {
+                    "analyst_estimates": state["section_statuses"]["analyst_estimates"],
+                },
+            }
 
         # ------------------------------------------------------------------
         # Consensus growth path from earnings_estimate / revenue_estimate
@@ -244,7 +250,14 @@ async def run(state: GraphState) -> GraphState:
             "ttl_remaining_s": None,
         }
 
-    return state
+    # Return only the keys this node writes — avoids LangGraph InvalidUpdateError
+    # when parallel nodes each try to update the same state keys.
+    return {
+        "analyst_estimates": state.get("analyst_estimates"),
+        "section_statuses": {
+            "analyst_estimates": state.get("section_statuses", {}).get("analyst_estimates", {}),
+        },
+    }
 
 
 def _template_notes(

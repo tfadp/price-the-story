@@ -317,7 +317,14 @@ async def run(state: GraphState) -> GraphState:
             "ttl_remaining_s": None,
         }
 
-    return state
+    # Return only the keys this node writes — avoids LangGraph InvalidUpdateError
+    # when parallel nodes each try to update the same state keys.
+    return {
+        "fundamentals": state.get("fundamentals"),
+        "section_statuses": {
+            "fundamentals": state.get("section_statuses", {}).get("fundamentals", {}),
+        },
+    }
 
 
 def _template_summary(

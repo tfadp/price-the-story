@@ -6,8 +6,18 @@ results on failure rather than crashing the pipeline.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Annotated, Callable, Optional
 from typing_extensions import TypedDict
+
+
+def _merge_section_statuses(a: dict, b: dict) -> dict:
+    """Reducer for section_statuses — merges dicts from parallel nodes.
+
+    Without this reducer, LangGraph would raise InvalidUpdateError when
+    multiple parallel nodes each write their own key into section_statuses.
+    The reducer tells LangGraph to merge the dicts rather than conflict.
+    """
+    return {**a, **b}
 
 
 class GraphState(TypedDict, total=False):
@@ -61,7 +71,9 @@ class GraphState(TypedDict, total=False):
     red_flags: list[dict]
 
     # ---- Metadata -------------------------------------------------------
-    section_statuses: dict[str, dict]
+    # Annotated with _merge_section_statuses so parallel nodes can each write
+    # their own key without LangGraph raising InvalidUpdateError.
+    section_statuses: Annotated[dict[str, dict], _merge_section_statuses]
     errors: list[str]
     # Async callable: (stage: str, node: str, pct: int) -> None
     # Used by nodes to emit SSE progress events.
