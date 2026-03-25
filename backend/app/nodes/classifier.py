@@ -71,6 +71,33 @@ async def _classify(state: GraphState) -> GraphState:
             info.get("regularMarketPrice") or info.get("previousClose") or 0
         )
 
+    # Step 1b: Supplement missing market_cap / volume from yfinance when FD path was used.
+    # FD never returns volume and sometimes omits market_cap. yfinance fast_info fills the gap.
+    market_cap_raw: float = info.get("marketCap", 0) or 0
+    avg_vol_raw: float = (
+        info.get("averageDailyVolume10Day")
+        or info.get("regularMarketVolume")
+        or 0
+    )
+
+    if _source == "financial_datasets" and (market_cap_raw == 0 or avg_vol_raw == 0):
+        try:
+            yf_info = await get_ticker_info(ticker)
+            if market_cap_raw == 0:
+                info["marketCap"] = yf_info.get("marketCap") or 0
+            if avg_vol_raw == 0:
+                info["averageDailyVolume10Day"] = (
+                    yf_info.get("averageDailyVolume10Day")
+                    or yf_info.get("regularMarketVolume")
+                    or 0
+                )
+            logger.info(
+                "classifier: supplemented market_cap=%s vol=%s from yfinance for %s",
+                info.get("marketCap"), info.get("averageDailyVolume10Day"), ticker,
+            )
+        except Exception as e:
+            logger.warning("classifier: yfinance supplement failed for %s: %s", ticker, e)
+
     # Step 2: Must be an equity
     quote_type = info.get("quoteType")
     if quote_type != "EQUITY":

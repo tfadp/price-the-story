@@ -8,7 +8,7 @@ interface PanelProps {
 }
 
 function Panel({ label, children }: PanelProps) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   return (
     <div className="border border-gray-700 rounded-xl overflow-hidden">
       <button
@@ -197,6 +197,11 @@ export default function DetailPanels({ data }: Props) {
         <Panel label="The Environment">
           {macro_and_crowd ? (
             <div className="flex flex-col gap-3">
+              {(macro_and_crowd as any).macro_narrative && (
+                <p className="text-sm text-gray-300 mb-3 italic">
+                  {(macro_and_crowd as any).macro_narrative}
+                </p>
+              )}
               <div>
                 <p className="text-xs text-gray-500 mb-1">Macro regime</p>
                 <p className="text-base font-semibold">
