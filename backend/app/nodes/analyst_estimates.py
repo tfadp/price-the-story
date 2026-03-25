@@ -118,20 +118,42 @@ async def run(state: GraphState) -> dict:
                 })
 
         # ------------------------------------------------------------------
-        # Rating summary from recommendations
+        # Rating summary — handle yfinance 0.2.x summary format AND legacy
         # ------------------------------------------------------------------
         buy_count = hold_count = sell_count = 0
         recommendations: list[dict] = data.get("recommendations", []) or []
-        # Use last 90 days of recommendations (most recent N rows)
-        recent_recs = recommendations[-30:] if len(recommendations) > 30 else recommendations
-        for row in recent_recs:
-            grade = str(row.get("To Grade", row.get("toGrade", row.get("action", "")))).lower()
-            if any(term in grade for term in ("buy", "outperform", "overweight", "strong buy", "positive")):
-                buy_count += 1
-            elif any(term in grade for term in ("sell", "underperform", "underweight", "reduce", "negative")):
-                sell_count += 1
-            else:
-                hold_count += 1
+        upgrades_downgrades: list[dict] = data.get("upgrades_downgrades", []) or []
+
+        # yfinance 0.2.x: recommendations rows have strongBuy/buy/hold/sell/strongSell
+        # Use the most recent period row (index 0 = current month)
+        if recommendations and ("strongBuy" in recommendations[0] or "buy" in recommendations[0]):
+            # Summary format — aggregate across all periods for robustness
+            for row in recommendations:
+                buy_count += int(row.get("strongBuy") or 0) + int(row.get("buy") or 0)
+                hold_count += int(row.get("hold") or 0)
+                sell_count += int(row.get("sell") or 0) + int(row.get("strongSell") or 0)
+        elif upgrades_downgrades:
+            # Use upgrades_downgrades for firm-level data (available in 0.2.x)
+            recent = upgrades_downgrades[-90:] if len(upgrades_downgrades) > 90 else upgrades_downgrades
+            for row in recent:
+                grade = str(row.get("ToGrade") or row.get("To Grade") or row.get("toGrade") or "").lower()
+                if any(t in grade for t in ("buy", "outperform", "overweight", "strong buy", "positive")):
+                    buy_count += 1
+                elif any(t in grade for t in ("sell", "underperform", "underweight", "reduce", "negative")):
+                    sell_count += 1
+                else:
+                    hold_count += 1
+        else:
+            # Legacy format fallback
+            recent_recs = recommendations[-30:] if len(recommendations) > 30 else recommendations
+            for row in recent_recs:
+                grade = str(row.get("To Grade", row.get("toGrade", row.get("action", "")))).lower()
+                if any(t in grade for t in ("buy", "outperform", "overweight", "strong buy", "positive")):
+                    buy_count += 1
+                elif any(t in grade for t in ("sell", "underperform", "underweight", "reduce", "negative")):
+                    sell_count += 1
+                else:
+                    hold_count += 1
 
         total_ratings = buy_count + hold_count + sell_count
         rating_summary = {
@@ -162,50 +184,91 @@ async def run(state: GraphState) -> dict:
                 avg_target_price = sum(valid_targets) / len(valid_targets)
 
         # ------------------------------------------------------------------
-        # Analyst sentiment notes (LLM or template)
+        # Analyst sentiment notes — Perplexity web search, then LLM, then template
         # ------------------------------------------------------------------
         from app.config import settings
 
         analyst_sentiment_notes: str
-        if settings.anthropic_api_key and (rating_summary or avg_target_price):
-            try:
-                from langchain_anthropic import ChatAnthropic
-                from langchain_core.messages import HumanMessage
+        perplexity_succeeded = False
 
-                llm = ChatAnthropic(
-                    model="claude-haiku-4-5-20251001",
-                    api_key=settings.anthropic_api_key,
-                    max_tokens=150,
-                )
-                prompt = (
-                    f"In 2 sentences, summarise analyst sentiment for {ticker}. "
-                    f"Rating breakdown: buy={buy_count}, hold={hold_count}, sell={sell_count}. "
-                    f"Average price target: {f'${avg_target_price:.2f}' if avg_target_price else 'N/A'}. "
-                    f"Revision trend: {revision_trend or 'unknown'}. "
-                    "Be factual. Do not add information not in the data."
-                )
-                response = await llm.ainvoke([HumanMessage(content=prompt)])
-                analyst_sentiment_notes = str(response.content).strip()
+        if settings.perplexity_api_key and (rating_summary or avg_target_price):
+            try:
+                import httpx as _httpx
+                payload = {
+                    "model": "sonar",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": (
+                                f"In exactly 2 sentences, summarise the current Wall Street analyst "
+                                f"consensus for {ticker} stock. Mention the buy/hold/sell breakdown, "
+                                f"the average price target, and any notable recent revision trends. "
+                                f"Use only data from reputable financial sources. Be factual and concise."
+                            ),
+                        }
+                    ],
+                    "max_tokens": 120,
+                    "temperature": 0.1,
+                    "return_citations": False,
+                }
+                async with _httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(
+                        "https://api.perplexity.ai/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {settings.perplexity_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    pdata = resp.json()
+                    analyst_sentiment_notes = pdata["choices"][0]["message"]["content"].strip()
+                    perplexity_succeeded = True
+                    logger.info("analyst_estimates: Perplexity narrative succeeded for %s", ticker)
             except Exception as e:
-                logger.warning("analyst_estimates: LLM notes failed: %s", e)
+                logger.warning("analyst_estimates: Perplexity narrative failed for %s: %s", ticker, e)
+
+        if not perplexity_succeeded:
+            if settings.anthropic_api_key and (rating_summary or avg_target_price):
+                try:
+                    from langchain_anthropic import ChatAnthropic
+                    from langchain_core.messages import HumanMessage
+
+                    llm = ChatAnthropic(
+                        model="claude-haiku-4-5-20251001",
+                        api_key=settings.anthropic_api_key,
+                        max_tokens=150,
+                    )
+                    prompt = (
+                        f"In 2 sentences, summarise analyst sentiment for {ticker}. "
+                        f"Rating breakdown: buy={buy_count}, hold={hold_count}, sell={sell_count}. "
+                        f"Average price target: {f'${avg_target_price:.2f}' if avg_target_price else 'N/A'}. "
+                        f"Revision trend: {revision_trend or 'unknown'}. "
+                        "Be factual. Do not add information not in the data."
+                    )
+                    response = await llm.ainvoke([HumanMessage(content=prompt)])
+                    analyst_sentiment_notes = str(response.content).strip()
+                except Exception as e:
+                    logger.warning("analyst_estimates: LLM notes failed: %s", e)
+                    analyst_sentiment_notes = _template_notes(ticker, buy_count, hold_count, sell_count, avg_target_price, revision_trend)
+            else:
                 analyst_sentiment_notes = _template_notes(ticker, buy_count, hold_count, sell_count, avg_target_price, revision_trend)
-        else:
-            analyst_sentiment_notes = _template_notes(ticker, buy_count, hold_count, sell_count, avg_target_price, revision_trend)
 
         # ------------------------------------------------------------------
-        # Tracked analysts (best effort from recommendations)
+        # Tracked analysts — use upgrades_downgrades for firm-level history
         # ------------------------------------------------------------------
         tracked_analysts: list[dict] = []
         seen_firms: set = set()
-        for row in reversed(recommendations):
-            firm = str(row.get("Firm", row.get("firm", "")))
+        source_for_firms = upgrades_downgrades if upgrades_downgrades else recommendations
+        for row in reversed(source_for_firms):
+            firm = str(row.get("Firm") or row.get("firm") or "")
             if firm and firm not in seen_firms:
                 seen_firms.add(firm)
                 tracked_analysts.append({
                     "analyst_id": firm.lower().replace(" ", "_"),
                     "analyst_name": "Unknown",
                     "firm": firm,
-                    "current_rating": str(row.get("To Grade", row.get("toGrade", ""))),
+                    "current_rating": str(row.get("ToGrade") or row.get("To Grade") or row.get("toGrade") or ""),
                     "current_price_target": None,
                     "accuracy_score": None,
                     "graded_calls_count": 0,

@@ -203,11 +203,24 @@ async def get_financials(ticker: str) -> dict:
 async def get_analyst_data(ticker: str) -> dict:
     """Return analyst recommendations, price targets, and earnings forecasts.
 
+    Handles both yfinance 0.2.x summary format (strongBuy/buy/hold/sell/strongSell)
+    and the legacy firm-level recommendations format.
+
     Returns an empty dict on failure (non-critical).
     """
     def _fetch() -> dict:
         t = yf.Ticker(ticker, session=_SESSION)
+
+        # yfinance 0.2.x: recommendations is a period-summary DataFrame
+        # yfinance legacy: recommendations is a firm-level DataFrame
         recommendations = t.recommendations
+
+        # upgrades_downgrades gives firm-level history in 0.2.x
+        try:
+            upgrades_downgrades = t.upgrades_downgrades
+        except Exception:
+            upgrades_downgrades = None
+
         earnings_estimate = t.earnings_estimate
         revenue_estimate = t.revenue_estimate
         eps_trend = t.eps_trend
@@ -216,6 +229,7 @@ async def get_analyst_data(ticker: str) -> dict:
 
         return {
             "recommendations": recommendations,
+            "upgrades_downgrades": upgrades_downgrades,
             "earnings_estimate": earnings_estimate,
             "revenue_estimate": revenue_estimate,
             "eps_trend": eps_trend,
@@ -240,7 +254,6 @@ async def get_analyst_data(ticker: str) -> dict:
         if df is None or (hasattr(df, "empty") and df.empty):
             return []
         try:
-            # Reset index to include it as a column
             df_reset = df.reset_index()
             records = []
             for _, row in df_reset.iterrows():
@@ -264,6 +277,7 @@ async def get_analyst_data(ticker: str) -> dict:
 
     return {
         "recommendations": _safe_df(raw.get("recommendations")),
+        "upgrades_downgrades": _safe_df(raw.get("upgrades_downgrades")),
         "earnings_estimate": _safe_df(raw.get("earnings_estimate")),
         "revenue_estimate": _safe_df(raw.get("revenue_estimate")),
         "eps_trend": _safe_df(raw.get("eps_trend")),

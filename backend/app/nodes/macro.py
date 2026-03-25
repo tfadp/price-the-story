@@ -102,12 +102,42 @@ async def run(state: GraphState) -> dict:
         # ------------------------------------------------------------------
         scenario_impacts = _build_scenario_impacts(macro_regime)
 
+        # ------------------------------------------------------------------
+        # Macro narrative — Claude Haiku 2-sentence summary for this ticker
+        # ------------------------------------------------------------------
+        macro_narrative: Optional[str] = None
+        ticker: str = state.get("ticker", "")
+        try:
+            from app.config import settings
+            if settings.anthropic_api_key and ticker:
+                from langchain_anthropic import ChatAnthropic
+                from langchain_core.messages import HumanMessage
+
+                impact_names = [s.get("scenario", "") for s in scenario_impacts]
+                llm = ChatAnthropic(
+                    model="claude-haiku-4-5-20251001",
+                    api_key=settings.anthropic_api_key,
+                    max_tokens=100,
+                )
+                prompt = (
+                    f"In exactly 2 sentences, explain how the current macro regime "
+                    f"({macro_regime.replace('_', ' ')}) affects {ticker} specifically. "
+                    f"Key scenario factors: {', '.join(impact_names) or 'none'}. "
+                    "Be direct. Do not repeat the regime name. Do not add data not given."
+                )
+                response = await llm.ainvoke([HumanMessage(content=prompt)])
+                macro_narrative = str(response.content).strip()
+                logger.info("macro: LLM narrative succeeded for %s", ticker)
+        except Exception as e:
+            logger.warning("macro: LLM narrative failed for %s: %s", ticker, e)
+
         return {
             "macro": {
                 "macro_regime": macro_regime,
                 "macro_regime_confidence": macro_regime_confidence,
                 "scenario_impacts": scenario_impacts,
                 "polymarket_signals": [],
+                "macro_narrative": macro_narrative,
             },
         }
 
@@ -119,6 +149,7 @@ async def run(state: GraphState) -> dict:
                 "macro_regime_confidence": "low",
                 "scenario_impacts": [],
                 "polymarket_signals": [],
+                "macro_narrative": None,
             },
         }
 
