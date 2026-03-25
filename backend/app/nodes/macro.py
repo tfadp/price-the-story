@@ -52,9 +52,12 @@ async def _fetch_current_close(symbol: str) -> Optional[float]:
     return None
 
 
-async def run(state: GraphState) -> GraphState:
-    """Node 8: Macro. Rule-based regime detection using ETF proxies."""
-    state.setdefault("section_statuses", {})
+async def run(state: GraphState) -> dict:
+    """Node 8: Macro. Rule-based regime detection using ETF proxies.
+
+    Returns only the keys this node writes so LangGraph parallel fan-out
+    does not raise InvalidUpdateError when multiple nodes run concurrently.
+    """
 
     try:
         import asyncio
@@ -99,36 +102,25 @@ async def run(state: GraphState) -> GraphState:
         # ------------------------------------------------------------------
         scenario_impacts = _build_scenario_impacts(macro_regime)
 
-        state["macro"] = {
-            "macro_regime": macro_regime,
-            "macro_regime_confidence": macro_regime_confidence,
-            "scenario_impacts": scenario_impacts,
-            "polymarket_signals": [],
-        }
-
-        state["section_statuses"]["macro"] = {
-            "status": "ok",
-            "source": "yfinance",
-            "cached": False,
-            "ttl_remaining_s": None,
+        return {
+            "macro": {
+                "macro_regime": macro_regime,
+                "macro_regime_confidence": macro_regime_confidence,
+                "scenario_impacts": scenario_impacts,
+                "polymarket_signals": [],
+            },
         }
 
     except Exception as e:
         logger.warning("macro: node failed: %s", e)
-        state["macro"] = {
-            "macro_regime": "unknown",
-            "macro_regime_confidence": "low",
-            "scenario_impacts": [],
-            "polymarket_signals": [],
+        return {
+            "macro": {
+                "macro_regime": "unknown",
+                "macro_regime_confidence": "low",
+                "scenario_impacts": [],
+                "polymarket_signals": [],
+            },
         }
-        state.setdefault("section_statuses", {})["macro"] = {
-            "status": "failed",
-            "source": None,
-            "cached": False,
-            "ttl_remaining_s": None,
-        }
-
-    return state
 
 
 def _build_scenario_impacts(regime: str) -> list[dict]:

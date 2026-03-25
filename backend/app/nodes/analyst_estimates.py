@@ -4,6 +4,12 @@ Node 4: Analyst Estimates.
 Fetches analyst consensus data via yfinance and optionally generates a
 short narrative via Claude Haiku.
 
+NOTE: yfinance is the intentional primary source for this node.
+Financial Datasets (financialdatasets.ai) does not provide analyst
+recommendations, price targets, or earnings estimate revisions — the
+data that this node is specifically responsible for. yfinance is not
+a fallback here; it is the only source of this data in v1.
+
 Never crashes the pipeline — all exceptions caught and logged.
 """
 import logging
@@ -26,26 +32,24 @@ def _safe_float(val) -> Optional[float]:
         return None
 
 
-async def run(state: GraphState) -> GraphState:
-    """Node 4: Analyst Estimates. Returns partial result on failure."""
+async def run(state: GraphState) -> dict:
+    """Node 4: Analyst Estimates. Returns delta dict on success or failure.
+
+    Returns only the keys this node writes so LangGraph parallel fan-out
+    does not raise InvalidUpdateError when multiple nodes run concurrently.
+    """
     ticker: str = state["ticker"]
-    state.setdefault("section_statuses", {})
 
     try:
         data = await get_analyst_data(ticker)
 
         if not data:
-            state["analyst_estimates"] = {
-                "coverage_level": "low",
-                "analyst_sentiment_notes": "Analyst data unavailable.",
+            return {
+                "analyst_estimates": {
+                    "coverage_level": "low",
+                    "analyst_sentiment_notes": "Analyst data unavailable.",
+                },
             }
-            state["section_statuses"]["analyst_estimates"] = {
-                "status": "failed",
-                "source": None,
-                "cached": False,
-                "ttl_remaining_s": None,
-            }
-            return state
 
         # ------------------------------------------------------------------
         # Consensus growth path from earnings_estimate / revenue_estimate
@@ -210,41 +214,30 @@ async def run(state: GraphState) -> GraphState:
                 break
 
         # ------------------------------------------------------------------
-        # Write to state
+        # Return delta — only keys this node owns
         # ------------------------------------------------------------------
-        state["analyst_estimates"] = {
-            "coverage_level": coverage_level,
-            "consensus_growth_path": consensus_growth_path,
-            "revision_trend": revision_trend,
-            "surprise_history": surprise_history,
-            "rating_summary": rating_summary,
-            "avg_target_price": avg_target_price,
-            "weighted_target_price": avg_target_price,
-            "analyst_sentiment_notes": analyst_sentiment_notes,
-            "tracked_analysts": tracked_analysts,
-        }
-
-        state["section_statuses"]["analyst_estimates"] = {
-            "status": "ok",
-            "source": "yfinance",
-            "cached": False,
-            "ttl_remaining_s": None,
+        return {
+            "analyst_estimates": {
+                "coverage_level": coverage_level,
+                "consensus_growth_path": consensus_growth_path,
+                "revision_trend": revision_trend,
+                "surprise_history": surprise_history,
+                "rating_summary": rating_summary,
+                "avg_target_price": avg_target_price,
+                "weighted_target_price": avg_target_price,
+                "analyst_sentiment_notes": analyst_sentiment_notes,
+                "tracked_analysts": tracked_analysts,
+            },
         }
 
     except Exception as e:
         logger.warning("analyst_estimates: node failed for %s: %s", ticker, e)
-        state["analyst_estimates"] = {
-            "coverage_level": "low",
-            "analyst_sentiment_notes": "Analyst data unavailable.",
+        return {
+            "analyst_estimates": {
+                "coverage_level": "low",
+                "analyst_sentiment_notes": "Analyst data unavailable.",
+            },
         }
-        state.setdefault("section_statuses", {})["analyst_estimates"] = {
-            "status": "failed",
-            "source": None,
-            "cached": False,
-            "ttl_remaining_s": None,
-        }
-
-    return state
 
 
 def _template_notes(

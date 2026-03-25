@@ -1,25 +1,30 @@
 # todo.md — Roadmap
 
 ## Session State
-- branch: (not yet a git repo)
-- last_test: (none yet)
-- blocked: awaiting answers to Genesis questions
-- pending_decisions: See questions below
+- branch: main
+- last_test: (pending — agents building now)
+- blocked: none
+- pending_decisions: user needs Anthropic API key before running
 
 ## Build Phases (from spec)
-- [ ] Phase 1 — Spine & Data (Weeks 1–3): FastAPI + SSE, LangGraph nodes 1–4, OpenBB/yfinance/FMP, Redis cache
-- [ ] Phase 2 — RAG & Growth Bet (Weeks 4–7): EdgarTools, Finnhub, ChromaDB, nodes 5–7
-- [ ] Phase 3 — Macro, Crowd & Stress Test (Weeks 8–10): nodes 8–9, stress test
-- [ ] Phase 4 — Probability Engine (Weeks 11–12): assumption-driven weights, calibration
-- [ ] Phase 5 — Analyst Tracking & Grading (Weeks 13–15)
-- [ ] Phase 6 — Prediction Ledger (Weeks 16–17)
-- [ ] Phase 7 — PM Synthesis & Full Frontend (Weeks 18–20)
-- [ ] Phase 8 — Calibration Feedback & Hardening (Week 21)
+- [x] Phase 0 — Claude OS sidecar, skeleton, contracts
+- [ ] Phase 1 — Backend: nodes 1-4, 10-11, FastAPI (AGENT BUILDING NOW)
+- [ ] Phase 1 — Frontend: Next.js, VerdictCard, InputForm, ProgressRail (AGENT BUILDING NOW)
+- [ ] Phase 2 — RAG & Growth Bet: EdgarTools, Finnhub, ChromaDB, nodes 5-7
+- [ ] Phase 3 — Macro, Crowd & Stress Test: nodes 8-9, full stress test
+- [ ] Phase 4 — Probability Engine improvements + calibration
+- [ ] Phase 5 — Analyst Tracking & Grading
+- [ ] Phase 6 — Prediction Ledger
+- [ ] Phase 7 — PM Synthesis hardening & full frontend polish
+- [ ] Phase 8 — Calibration Feedback & Hardening
 
-## Next 3 Steps (Phase 1 setup)
-1) Answer Genesis questions → confirm starting point
-2) Path A vs Path B for project structure
-3) Initialize git repo + create Phase 1 skeleton
+## Next 3 Steps (after agents complete)
+1) User gets Anthropic API key → copies .env.example to .env → adds key
+2) `cd backend && pip install -r requirements.txt && uvicorn app.main:app --port 8000`
+3) `cd frontend && npm install && npm run dev` → open http://localhost:3000
 
 ## Backlog
--
+- Add FMP API key for better analyst estimates
+- Add Finnhub API key for news + transcripts
+- Redis caching (Phase 2)
+- ChromaDB + EdgarTools for filings RAG (Phase 2)

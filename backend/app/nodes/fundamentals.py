@@ -1,19 +1,27 @@
 """
 Node 2: Fundamentals.
 
-Fetches financial statements via yfinance, computes derived metrics,
-factor scores, and generates a business summary (via Claude Haiku if
-an API key is available, otherwise a template string).
+Fetches financial statements — Financial Datasets is tried first, yfinance
+is the fallback. Computes derived metrics, factor scores, and generates a
+business summary (via Claude Haiku if an API key is available, otherwise
+a template string).
 
 This node NEVER crashes the pipeline — all exceptions are caught,
 logged, and a "failed" status is written to state.
 """
+import asyncio
 import logging
 import math
 from typing import Optional
 
 from app.state import GraphState
 from app.data.yfinance_client import get_financials, get_current_price
+from app.data.financial_datasets_client import (
+    get_income_statements,
+    get_balance_sheets,
+    get_cash_flow_statements,
+    get_snapshot_price,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -72,35 +80,126 @@ def _compute_cagr(values: list[Optional[float]]) -> Optional[float]:
         return None
 
 
-async def run(state: GraphState) -> GraphState:
-    """Node 2: Fundamentals. Returns partial result on failure."""
+async def run(state: GraphState) -> dict:
+    """Node 2: Fundamentals. Returns delta dict on success or failure.
+
+    Returns only the keys this node writes so LangGraph parallel fan-out
+    does not raise InvalidUpdateError when multiple nodes run concurrently.
+    """
     ticker: str = state["ticker"]
-    state.setdefault("section_statuses", {})
+    _section_statuses: dict = {}
 
     try:
-        financials = await get_financials(ticker)
-        income_records: list[dict] = financials.get("income_stmt", [])
-        balance_records: list[dict] = financials.get("balance_sheet", [])
-        cashflow_records: list[dict] = financials.get("cashflow", [])
+        # ------------------------------------------------------------------
+        # Fetch financial statements — Financial Datasets first, yfinance fallback
+        # ------------------------------------------------------------------
+        _fundamentals_source = "financial_datasets"
+        try:
+            fd_income, fd_balance, fd_cashflow = await asyncio.gather(
+                get_income_statements(ticker),
+                get_balance_sheets(ticker),
+                get_cash_flow_statements(ticker),
+            )
+            # FD returns records newest-first; reverse once so oldest is index 0
+            income_fd = list(reversed(fd_income))
+            balance_fd = list(reversed(fd_balance))
+            cashflow_fd = list(reversed(fd_cashflow))
+            _use_fd = bool(income_fd or balance_fd or cashflow_fd)
+        except Exception as fd_err:
+            logger.warning("fundamentals: FD fetch failed, falling back to yfinance: %s", fd_err)
+            _use_fd = False
+
+        if _use_fd:
+            # Build time series directly from FD snake_case field names
+            revenues: list[Optional[float]] = [_safe_float(r.get("revenue")) for r in income_fd]
+            gross_profits: list[Optional[float]] = [_safe_float(r.get("gross_profit")) for r in income_fd]
+            operating_incomes: list[Optional[float]] = [_safe_float(r.get("operating_income")) for r in income_fd]
+            net_incomes: list[Optional[float]] = [_safe_float(r.get("net_income")) for r in income_fd]
+            # Prefer diluted EPS; eps field also acceptable
+            eps_list: list[Optional[float]] = [
+                _safe_float(r.get("eps_diluted") or r.get("eps")) for r in income_fd
+            ]
+
+            # FD provides free_cash_flow directly — no need to recompute from parts
+            free_cash_flows: list[Optional[float]] = [
+                _safe_float(r.get("free_cash_flow")) for r in cashflow_fd
+            ]
+
+            net_debts: list[Optional[float]] = []
+            for bs_row in balance_fd:
+                total_debt = _safe_float(bs_row.get("total_debt"))
+                cash = _safe_float(bs_row.get("cash_and_equivalents"))
+                if total_debt is not None and cash is not None:
+                    net_debts.append(_safe_float(total_debt - cash))
+                else:
+                    net_debts.append(None)
+
+            # ROIC: net_income / (total_equity + total_debt) — approximate
+            roic_list: list[Optional[float]] = []
+            for ni, bs_row in zip(net_incomes, balance_fd):
+                equity = _safe_float(bs_row.get("total_equity"))
+                ltd = _safe_float(bs_row.get("total_debt"))
+                if ni is not None and equity is not None:
+                    denom = (equity or 0) + (ltd or 0)
+                    roic_list.append(_safe_float(ni / denom) if denom else None)
+                else:
+                    roic_list.append(None)
+        else:
+            # yfinance fallback — field names use Title Case (yfinance convention)
+            _fundamentals_source = "yfinance"
+            financials = await get_financials(ticker)
+            income_records: list[dict] = financials.get("income_stmt", [])
+            balance_records: list[dict] = financials.get("balance_sheet", [])
+            cashflow_records: list[dict] = financials.get("cashflow", [])
+
+            revenues = []
+            gross_profits = []
+            operating_incomes = []
+            net_incomes = []
+            eps_list = []
+
+            # yfinance income statement field names vary by version
+            for row in reversed(income_records):
+                revenues.append(_find_field(row, "Total Revenue", "TotalRevenue", "Revenue"))
+                gross_profits.append(_find_field(row, "Gross Profit", "GrossProfit"))
+                operating_incomes.append(_find_field(row, "Operating Income", "OperatingIncome", "EBIT"))
+                net_incomes.append(_find_field(row, "Net Income", "NetIncome", "Net Income Common Stockholders"))
+                eps_list.append(_find_field(row, "Basic EPS", "Diluted EPS", "EPS", "BasicEPS", "DilutedEPS"))
+
+            # Free cash flow: operating cash flow + capex (capex is negative in yfinance)
+            free_cash_flows = []
+            for cf_row in reversed(cashflow_records):
+                op_cf = _find_field(cf_row, "Operating Cash Flow", "Cash From Operations", "OperatingCashFlow")
+                capex = _find_field(cf_row, "Capital Expenditure", "CapEx", "CapitalExpenditure", "Purchase Of PPE")
+                if op_cf is not None:
+                    capex_val = capex or 0
+                    free_cash_flows.append(_safe_float(op_cf + capex_val))
+                else:
+                    free_cash_flows.append(None)
+
+            net_debts = []
+            for bs_row in reversed(balance_records):
+                total_debt = _find_field(bs_row, "Total Debt", "TotalDebt", "Long Term Debt And Capital Lease Obligation")
+                cash = _find_field(bs_row, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents")
+                if total_debt is not None and cash is not None:
+                    net_debts.append(_safe_float(total_debt - cash))
+                else:
+                    net_debts.append(None)
+
+            # ROIC: net_income / (total_equity + long_term_debt) — approximate
+            roic_list = []
+            for ni, bs_row in zip(net_incomes, reversed(balance_records)):
+                equity = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
+                ltd = _find_field(bs_row, "Long Term Debt", "LongTermDebt")
+                if ni is not None and equity is not None:
+                    denom = (equity or 0) + (ltd or 0)
+                    roic_list.append(_safe_float(ni / denom) if denom else None)
+                else:
+                    roic_list.append(None)
 
         # ------------------------------------------------------------------
-        # Build annual time series (oldest → newest, up to 10 years)
+        # Derived per-year margin metrics (same formula regardless of source)
         # ------------------------------------------------------------------
-        revenues: list[Optional[float]] = []
-        gross_profits: list[Optional[float]] = []
-        operating_incomes: list[Optional[float]] = []
-        net_incomes: list[Optional[float]] = []
-        eps_list: list[Optional[float]] = []
-
-        # yfinance income statement field names (varies by version)
-        for row in reversed(income_records):
-            revenues.append(_find_field(row, "Total Revenue", "TotalRevenue", "Revenue"))
-            gross_profits.append(_find_field(row, "Gross Profit", "GrossProfit"))
-            operating_incomes.append(_find_field(row, "Operating Income", "OperatingIncome", "EBIT"))
-            net_incomes.append(_find_field(row, "Net Income", "NetIncome", "Net Income Common Stockholders"))
-            eps_list.append(_find_field(row, "Basic EPS", "Diluted EPS", "EPS", "BasicEPS", "DilutedEPS"))
-
-        # Derived per-year metrics
         gross_margins: list[Optional[float]] = []
         operating_margins: list[Optional[float]] = []
         for rev, gp, oi in zip(revenues, gross_profits, operating_incomes):
@@ -110,39 +209,6 @@ async def run(state: GraphState) -> GraphState:
             else:
                 gross_margins.append(None)
                 operating_margins.append(None)
-
-        # Free cash flow: operating cash flow - capex
-        free_cash_flows: list[Optional[float]] = []
-        for cf_row in reversed(cashflow_records):
-            op_cf = _find_field(cf_row, "Operating Cash Flow", "Cash From Operations", "OperatingCashFlow")
-            capex = _find_field(cf_row, "Capital Expenditure", "CapEx", "CapitalExpenditure", "Purchase Of PPE")
-            if op_cf is not None:
-                capex_val = capex or 0
-                # Capex is usually negative in yfinance; we add it
-                free_cash_flows.append(_safe_float(op_cf + capex_val))
-            else:
-                free_cash_flows.append(None)
-
-        # Net debt: total debt - cash
-        net_debts: list[Optional[float]] = []
-        for bs_row in reversed(balance_records):
-            total_debt = _find_field(bs_row, "Total Debt", "TotalDebt", "Long Term Debt And Capital Lease Obligation")
-            cash = _find_field(bs_row, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents")
-            if total_debt is not None and cash is not None:
-                net_debts.append(_safe_float(total_debt - cash))
-            else:
-                net_debts.append(None)
-
-        # ROIC: net_income / (total_equity + long_term_debt) — approximate
-        roic_list: list[Optional[float]] = []
-        for ni, bs_row in zip(net_incomes, reversed(balance_records)):
-            equity = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
-            ltd = _find_field(bs_row, "Long Term Debt", "LongTermDebt")
-            if ni is not None and equity is not None:
-                denom = (equity or 0) + (ltd or 0)
-                roic_list.append(_safe_float(ni / denom) if denom else None)
-            else:
-                roic_list.append(None)
 
         # ------------------------------------------------------------------
         # Factor scores (normalised 0–1)
@@ -169,14 +235,17 @@ async def run(state: GraphState) -> GraphState:
             growth_score = min(1.0, max(0.0, revenue_cagr / 0.15))
 
         # ------------------------------------------------------------------
-        # Current price
+        # Current price — FD snapshot preferred, yfinance as fallback
         # ------------------------------------------------------------------
         try:
-            current_price = await get_current_price(ticker)
-        except ValueError:
-            current_price = _safe_float(
-                ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
-            )
+            current_price = await get_snapshot_price(ticker)
+        except Exception:
+            try:
+                current_price = await get_current_price(ticker)
+            except ValueError:
+                current_price = _safe_float(
+                    ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
+                )
 
         # ------------------------------------------------------------------
         # Business summary (LLM if key available, else template)
@@ -253,12 +322,16 @@ async def run(state: GraphState) -> GraphState:
                         "importance": "high",
                     })
 
-        # Balance sheet leverage
+        # Balance sheet leverage — extract equity from the correct source's rows
         recent_net_debts = [d for d in net_debts[-3:] if d is not None]
         recent_equities: list[Optional[float]] = []
-        for bs_row in reversed(balance_records[-3:]):
-            eq = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
-            recent_equities.append(eq)
+        if _use_fd:
+            for bs_row in balance_fd[-3:]:
+                recent_equities.append(_safe_float(bs_row.get("total_equity")))
+        else:
+            for bs_row in reversed(balance_records[-3:]):
+                eq = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
+                recent_equities.append(eq)
         valid_equities = [e for e in recent_equities if e is not None and e > 0]
         if recent_net_debts and valid_equities:
             avg_net_debt = sum(recent_net_debts) / len(recent_net_debts)
@@ -271,53 +344,46 @@ async def run(state: GraphState) -> GraphState:
                 })
 
         # ------------------------------------------------------------------
-        # Write state["fundamentals"]
+        # Build delta — only keys this node owns
         # ------------------------------------------------------------------
-        state["fundamentals"] = {
-            "thesis": {
-                "business_summary": business_summary,
-                "key_drivers": key_drivers,
-                "long_term_themes": [],
-                "growth_bet": None,
-            },
-            "time_series": {
-                "revenue": revenues,
-                "gross_profit": gross_profits,
-                "operating_income": operating_incomes,
-                "net_income": net_incomes,
-                "eps": eps_list,
-                "gross_margin": gross_margins,
-                "operating_margin": operating_margins,
-                "free_cash_flow": free_cash_flows,
-                "net_debt": net_debts,
-                "roic": roic_list,
-            },
-            "factor_scores": {
-                "value_score": value_score,
-                "quality_score": quality_score,
-                "growth_score": growth_score,
-            },
-            "current_price": current_price,
-        }
-
-        state["section_statuses"]["fundamentals"] = {
+        _section_statuses["fundamentals"] = {
             "status": "ok",
-            "source": "yfinance",
+            "source": _fundamentals_source,
             "cached": False,
             "ttl_remaining_s": None,
+        }
+        return {
+            "fundamentals": {
+                "thesis": {
+                    "business_summary": business_summary,
+                    "key_drivers": key_drivers,
+                    "long_term_themes": [],
+                    "growth_bet": None,
+                },
+                "time_series": {
+                    "revenue": revenues,
+                    "gross_profit": gross_profits,
+                    "operating_income": operating_incomes,
+                    "net_income": net_incomes,
+                    "eps": eps_list,
+                    "gross_margin": gross_margins,
+                    "operating_margin": operating_margins,
+                    "free_cash_flow": free_cash_flows,
+                    "net_debt": net_debts,
+                    "roic": roic_list,
+                },
+                "factor_scores": {
+                    "value_score": value_score,
+                    "quality_score": quality_score,
+                    "growth_score": growth_score,
+                },
+                "current_price": current_price,
+            },
         }
 
     except Exception as e:
         logger.warning("fundamentals: node failed for %s: %s", ticker, e)
-        state["fundamentals"] = None
-        state.setdefault("section_statuses", {})["fundamentals"] = {
-            "status": "failed",
-            "source": None,
-            "cached": False,
-            "ttl_remaining_s": None,
-        }
-
-    return state
+        return {"fundamentals": None}
 
 
 def _template_summary(

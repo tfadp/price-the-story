@@ -159,8 +159,8 @@ async def get_ticker_info(ticker: str) -> dict:
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 429:
             raise ValueError(
-                f"Yahoo Finance is rate-limiting this IP address. "
-                f"Stop all requests and wait 30 minutes before trying again."
+                "Yahoo Finance is rate-limiting this IP address. "
+                "Stop all requests and wait 30 minutes before trying again."
             ) from e
         raise ValueError(f"Direct API failed for {ticker}: {e}") from e
     except Exception as e:

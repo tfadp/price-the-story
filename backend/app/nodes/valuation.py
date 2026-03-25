@@ -13,6 +13,7 @@ from typing import Optional
 
 from app.state import GraphState
 from app.data.yfinance_client import get_current_price
+from app.data.financial_datasets_client import get_snapshot_price
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +75,29 @@ def _solve_implied_growth(
     return (lo + hi) / 2
 
 
-async def run(state: GraphState) -> GraphState:
-    """Node 3: Valuation. Returns partial result on failure."""
+async def run(state: GraphState) -> dict:
+    """Node 3: Valuation. Returns delta dict on success or failure.
+
+    Returns only the keys this node writes so LangGraph parallel fan-out
+    does not raise InvalidUpdateError when multiple nodes run concurrently.
+    """
     ticker: str = state["ticker"]
-    state.setdefault("section_statuses", {})
 
     try:
-        # Always use a fresh price
+        # Always use a fresh price — Financial Datasets snapshot first, yfinance fallback
         try:
-            current_price = await get_current_price(ticker)
-        except ValueError as e:
-            logger.warning("valuation: could not fetch current price for %s: %s", ticker, e)
-            ticker_meta = state.get("ticker_meta") or {}
-            current_price = _safe_float(
-                ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
-            )
-            if current_price is None:
-                raise ValueError("Current price unavailable") from e
+            current_price = await get_snapshot_price(ticker)
+        except Exception:
+            try:
+                current_price = await get_current_price(ticker)
+            except ValueError as e:
+                logger.warning("valuation: could not fetch current price for %s: %s", ticker, e)
+                ticker_meta = state.get("ticker_meta") or {}
+                current_price = _safe_float(
+                    ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
+                )
+                if current_price is None:
+                    raise ValueError("Current price unavailable") from e
 
         fund = state.get("fundamentals") or {}
         analyst_estimates = state.get("analyst_estimates") or {}
@@ -248,48 +255,35 @@ async def run(state: GraphState) -> GraphState:
         )
 
         # Save _base_growth so probability_engine can read it
-        state["valuation"] = {
-            "current_price": current_price,
-            "currency": "USD",
-            "fair_value_low": round(fair_value_low, 2),
-            "fair_value_base": round(fair_value_base, 2),
-            "fair_value_high": round(fair_value_high, 2),
-            "valuation_method_summary": valuation_method_summary,
-            "suggested_entry_band": {
-                "accumulate_below": round(accumulate_below, 2),
-                "strong_buy_below": round(strong_buy_below, 2),
-                "notes": None,
+        return {
+            "valuation": {
+                "current_price": current_price,
+                "currency": "USD",
+                "fair_value_low": round(fair_value_low, 2),
+                "fair_value_base": round(fair_value_base, 2),
+                "fair_value_high": round(fair_value_high, 2),
+                "valuation_method_summary": valuation_method_summary,
+                "suggested_entry_band": {
+                    "accumulate_below": round(accumulate_below, 2),
+                    "strong_buy_below": round(strong_buy_below, 2),
+                    "notes": None,
+                },
+                "price_efficiency_assessment": {
+                    "implied_revenue_cagr_5yr": implied_growth,
+                    "implied_vs_management_guidance": None,
+                    "implied_vs_stress_base": None,
+                    "implied_vs_stress_bear": None,
+                    "efficiency_verdict": efficiency_verdict,
+                    "efficiency_notes": efficiency_notes,
+                    "sentiment_premium_flag": sentiment_premium_flag,
+                    "sentiment_premium_notes": sentiment_premium_notes,
+                    "historical_analog": None,
+                },
+                # Internal: read by probability_engine
+                "_base_growth": base_growth,
             },
-            "price_efficiency_assessment": {
-                "implied_revenue_cagr_5yr": implied_growth,
-                "implied_vs_management_guidance": None,
-                "implied_vs_stress_base": None,
-                "implied_vs_stress_bear": None,
-                "efficiency_verdict": efficiency_verdict,
-                "efficiency_notes": efficiency_notes,
-                "sentiment_premium_flag": sentiment_premium_flag,
-                "sentiment_premium_notes": sentiment_premium_notes,
-                "historical_analog": None,
-            },
-            # Internal: read by probability_engine
-            "_base_growth": base_growth,
-        }
-
-        state["section_statuses"]["valuation"] = {
-            "status": "ok",
-            "source": "yfinance",
-            "cached": False,
-            "ttl_remaining_s": None,
         }
 
     except Exception as e:
         logger.warning("valuation: node failed for %s: %s", ticker, e)
-        state["valuation"] = None
-        state.setdefault("section_statuses", {})["valuation"] = {
-            "status": "failed",
-            "source": None,
-            "cached": False,
-            "ttl_remaining_s": None,
-        }
-
-    return state
+        return {"valuation": None}
