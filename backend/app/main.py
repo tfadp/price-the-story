@@ -4,16 +4,17 @@ POST /analyze-ticker         — full analysis, returns AnalyzeResponse JSON
 GET  /analyze-ticker/stream  — SSE stream of progress events
 GET  /health                 — health check
 """
-from __future__ import annotations
-
 import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from sse_starlette.sse import EventSourceResponse
 
 from app.models import (
@@ -36,6 +37,8 @@ from app.graph import graph
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address, default_limits=["5/minute"])
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,6 +52,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -65,20 +71,23 @@ async def health() -> HealthResponse:
 
 
 @app.post("/analyze-ticker", response_model=AnalyzeResponse)
-async def analyze_ticker(request: AnalyzeRequest) -> AnalyzeResponse:
-    state = _build_initial_state(request)
+@limiter.limit("5/minute")
+async def analyze_ticker(request: Request, body: AnalyzeRequest) -> AnalyzeResponse:
+    state = _build_initial_state(body)
     try:
         result = await graph.ainvoke(state)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:
-        logger.exception("Pipeline failed for %s", request.ticker)
-        raise HTTPException(status_code=500, detail=str(e))
-    return _state_to_response(result, request)
+    except Exception:
+        logger.exception("Pipeline failed for %s", body.ticker)
+        raise HTTPException(status_code=500, detail="Analysis failed. Please try again.")
+    return _state_to_response(result, body)
 
 
 @app.get("/analyze-ticker/stream")
+@limiter.limit("5/minute")
 async def analyze_ticker_stream(
+    request: Request,
     ticker: str = Query(...),
     target_cagr: float = Query(default=0.10),
     entry_price: float | None = Query(default=None),
@@ -93,34 +102,40 @@ async def analyze_ticker_stream(
                 ProgressEvent(stage=stage, message=stage, node=node, progress_pct=pct)
             )
 
-        request = AnalyzeRequest(
+        req = AnalyzeRequest(
             ticker=ticker,
             target_cagr=target_cagr,
             entry_price=entry_price,
             horizons=[1, holding_period_years, 5, 10],
             force_refresh=force_refresh,
         )
-        state = _build_initial_state(request)
+        state = _build_initial_state(req)
         state["progress_callback"] = progress_callback
 
         task = asyncio.create_task(graph.ainvoke(state))
 
-        while not task.done():
-            try:
-                event = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+        try:
+            while not task.done():
+                try:
+                    event = await asyncio.wait_for(progress_queue.get(), timeout=1.0)
+                    yield {"event": "progress", "data": event.model_dump_json()}
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}
+
+            while not progress_queue.empty():
+                event = progress_queue.get_nowait()
                 yield {"event": "progress", "data": event.model_dump_json()}
-            except asyncio.TimeoutError:
-                yield {"event": "ping", "data": "{}"}
 
-        while not progress_queue.empty():
-            event = progress_queue.get_nowait()
-            yield {"event": "progress", "data": event.model_dump_json()}
-
-        if task.exception():
-            yield {"event": "error", "data": f'{{"detail": "{task.exception()}"}}'}
-        else:
-            response = _state_to_response(task.result(), request)
-            yield {"event": "complete", "data": response.model_dump_json()}
+            if task.exception():
+                logger.error("SSE pipeline failed: %s", task.exception())
+                yield {"event": "error", "data": '{"detail": "Analysis failed. Please try again."}'}
+            else:
+                response = _state_to_response(task.result(), req)
+                yield {"event": "complete", "data": response.model_dump_json()}
+        finally:
+            if not task.done():
+                task.cancel()
+                logger.info("SSE task cancelled (client disconnected) for ticker=%s", ticker)
 
     return EventSourceResponse(event_generator())
 

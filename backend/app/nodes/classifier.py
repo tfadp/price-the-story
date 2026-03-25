@@ -8,6 +8,8 @@ import asyncio
 import logging
 import math
 
+import httpx
+
 from app.state import GraphState
 from app.data.yfinance_client import get_ticker_info, get_price_history, get_current_price
 from app.data.financial_datasets_client import get_company_facts, get_snapshot_price
@@ -96,7 +98,17 @@ async def _classify(state: GraphState) -> GraphState:
     if _source == "yfinance":
         try:
             current_price = await get_current_price(ticker)
-        except ValueError:
+        except (ValueError, httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as fd_error:
+            # A 404 from FD means the ticker genuinely does not exist — hard fail
+            is_404 = (
+                isinstance(fd_error, ValueError) and (
+                    "not found" in str(fd_error).lower() or "404" in str(fd_error)
+                )
+            ) or (
+                isinstance(fd_error, httpx.HTTPStatusError) and fd_error.response.status_code == 404
+            )
+            if is_404:
+                raise ValueError(str(fd_error)) from fd_error
             current_price = info.get("regularMarketPrice") or info.get("previousClose") or 0
 
     # Annualised volatility from 10yr history

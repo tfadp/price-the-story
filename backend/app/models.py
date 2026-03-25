@@ -5,10 +5,11 @@ All enums match SPECS.md Section B — do not change without Change Control.
 """
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -125,12 +126,34 @@ class Preferences(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     ticker: str = Field(..., description="US exchange symbol, e.g. AAPL")
-    target_cagr: float = Field(default=0.10, description="Target annual return as decimal")
-    entry_price: Optional[float] = Field(default=None, description="Override entry price USD")
+    target_cagr: float = Field(default=0.10, ge=0.01, le=10.0, description="Target annual return as decimal (0.01–10.0)")
+    entry_price: Optional[float] = Field(default=None, gt=0.0, description="Override entry price USD")
     horizons: list[int] = Field(default=[1, 3, 5, 10])
     preferences: Preferences = Field(default_factory=Preferences)
     force_refresh: bool = False
     debug: bool = False
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker(cls, v: str) -> str:
+        cleaned = v.strip().upper()
+        if not re.match(r"^[A-Z]{1,5}$", cleaned):
+            raise ValueError(
+                f"Invalid ticker '{v}'. Must be 1–5 uppercase letters (US equities only)."
+            )
+        return cleaned
+
+    @field_validator("horizons")
+    @classmethod
+    def validate_horizons(cls, v: list[int]) -> list[int]:
+        if not v:
+            raise ValueError("horizons must contain at least one value.")
+        if len(v) > 4:
+            raise ValueError("horizons may contain at most 4 values.")
+        for h in v:
+            if not (1 <= h <= 30):
+                raise ValueError(f"Each horizon must be between 1 and 30 years; got {h}.")
+        return v
 
 
 # ---------------------------------------------------------------------------
