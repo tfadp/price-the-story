@@ -6,12 +6,17 @@ Every call is wrapped in asyncio.wait_for with a 10-second timeout.
 yfinance is a scraper — it has no official API. Yahoo Finance rate-limits
 aggressively during development (many calls in a short window). In normal
 use (one analysis at a time), this is not an issue.
+
+When yfinance is rate-limited, get_ticker_info falls back to the Yahoo
+Finance v8/chart API directly via httpx, which uses a different endpoint
+and is significantly more resilient.
 """
 import asyncio
 import logging
 import requests
 from typing import Optional
 
+import httpx
 import pandas as pd
 import yfinance as yf
 
@@ -20,18 +25,59 @@ logger = logging.getLogger(__name__)
 # How long we'll wait for any yfinance network call before giving up
 _TIMEOUT_S = 15
 
-# Use a persistent session with browser-like headers to reduce rate limiting
-_SESSION = requests.Session()
-_SESSION.headers.update({
+# Browser-like headers used for the direct HTTP fallback
+_BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept": "application/json",
     "Accept-Language": "en-US,en;q=0.5",
-})
+    "Referer": "https://finance.yahoo.com/",
+}
+
+# Use a persistent session with browser-like headers to reduce rate limiting
+_SESSION = requests.Session()
+_SESSION.headers.update(_BROWSER_HEADERS)
 yf.set_tz_cache_location("/tmp/yfinance_tz_cache")
+
+
+async def _get_ticker_info_direct(ticker: str) -> dict:
+    """Fallback: fetch ticker info directly from Yahoo Finance v8 chart API.
+
+    This endpoint is less rate-limited than the quoteSummary endpoint that
+    yfinance uses for .info. Returns a minimal dict with the fields the
+    classifier needs: quoteType, exchange, regularMarketPrice, marketCap.
+    """
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {"interval": "1d", "range": "5d"}
+
+    async with httpx.AsyncClient(headers=_BROWSER_HEADERS, timeout=_TIMEOUT_S) as client:
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+
+    result = data.get("chart", {}).get("result")
+    if not result:
+        error = data.get("chart", {}).get("error", {})
+        raise ValueError(f"Ticker not found: {ticker} — {error.get('description', 'unknown')}")
+
+    meta = result[0].get("meta", {})
+    return {
+        "quoteType":             meta.get("instrumentType", "EQUITY"),
+        "exchange":              meta.get("exchangeName", ""),
+        "regularMarketPrice":    meta.get("regularMarketPrice"),
+        "previousClose":         meta.get("chartPreviousClose"),
+        "currency":              meta.get("currency", "USD"),
+        "symbol":                meta.get("symbol", ticker),
+        "shortName":             meta.get("shortName", ticker),
+        "longName":              meta.get("longName", ticker),
+        # marketCap not in v8/chart — will be None, classifier defaults to mid_cap
+        "marketCap":             None,
+        "regularMarketVolume":   None,
+        "_from_direct_api":      True,
+    }
 
 
 def _df_to_records(df: pd.DataFrame) -> list[dict]:
@@ -86,43 +132,39 @@ async def get_ticker_info(ticker: str) -> dict:
         t = yf.Ticker(ticker, session=_SESSION)
         return t.info
 
-    # Try fast_info first, fall back to full .info
-    for attempt in range(2):
-        try:
-            if attempt == 0:
-                info = await asyncio.wait_for(
-                    asyncio.to_thread(_fetch_fast),
-                    timeout=_TIMEOUT_S,
-                )
-                # fast_info succeeded — augment with a few .info fields if possible
-                if info.get("quoteType"):
-                    return info
-                # fast_info gave us nothing useful, fall through to full .info
-
-            info = await asyncio.wait_for(
-                asyncio.to_thread(_fetch_full),
-                timeout=_TIMEOUT_S,
-            )
-            if not info or info.get("quoteType") is None:
-                raise ValueError(f"Ticker not found or unsupported: {ticker}")
+    # Attempt 1: yfinance fast_info (lightweight)
+    try:
+        info = await asyncio.wait_for(asyncio.to_thread(_fetch_fast), timeout=_TIMEOUT_S)
+        if info.get("quoteType"):
+            logger.info("get_ticker_info: fast_info succeeded for %s", ticker)
             return info
+    except Exception as e:
+        logger.warning("get_ticker_info: fast_info failed for %s (%s), trying full .info", ticker, e)
 
-        except asyncio.TimeoutError:
-            if attempt == 0:
-                logger.warning("get_ticker_info: timeout on attempt 1 for %s, retrying", ticker)
-                await asyncio.sleep(2)
-                continue
-            raise ValueError(f"Timeout fetching info for {ticker}")
-        except ValueError:
-            raise
-        except Exception as e:
-            if attempt == 0:
-                logger.warning("get_ticker_info: error on attempt 1 for %s (%s), retrying in 3s", ticker, e)
-                await asyncio.sleep(3)
-                continue
-            raise ValueError(f"Failed to fetch ticker info for {ticker}: {e}") from e
+    # Attempt 2: yfinance full .info
+    try:
+        info = await asyncio.wait_for(asyncio.to_thread(_fetch_full), timeout=_TIMEOUT_S)
+        if info and info.get("quoteType"):
+            logger.info("get_ticker_info: full .info succeeded for %s", ticker)
+            return info
+    except Exception as e:
+        logger.warning("get_ticker_info: full .info failed for %s (%s), trying direct API", ticker, e)
 
-    raise ValueError(f"Failed to fetch ticker info for {ticker} after retries")
+    # Attempt 3: direct Yahoo Finance v8/chart API (bypasses yfinance crumb)
+    try:
+        logger.info("get_ticker_info: falling back to direct v8/chart API for %s", ticker)
+        info = await _get_ticker_info_direct(ticker)
+        logger.info("get_ticker_info: direct API succeeded for %s", ticker)
+        return info
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            raise ValueError(
+                f"Yahoo Finance is rate-limiting this IP address. "
+                f"Stop all requests and wait 30 minutes before trying again."
+            ) from e
+        raise ValueError(f"Direct API failed for {ticker}: {e}") from e
+    except Exception as e:
+        raise ValueError(f"All data sources failed for {ticker}: {e}") from e
 
 
 async def get_financials(ticker: str) -> dict:
