@@ -15,7 +15,7 @@ import math
 from typing import Optional
 
 from app.state import GraphState
-from app.data.yfinance_client import get_financials, get_current_price
+from app.data.alpha_vantage_client import get_financials, get_current_price
 from app.data.financial_datasets_client import (
     get_income_statements,
     get_balance_sheets,
@@ -163,20 +163,25 @@ async def run(state: GraphState) -> dict:
             net_incomes = []
             eps_list = []
 
-            # yfinance income statement field names vary by version
+            # Field names vary by source: AV uses camelCase, yfinance uses Title Case.
+            # _find_field is case-insensitive so both are covered.
             for row in reversed(income_records):
-                revenues.append(_find_field(row, "Total Revenue", "TotalRevenue", "Revenue"))
-                gross_profits.append(_find_field(row, "Gross Profit", "GrossProfit"))
-                operating_incomes.append(_find_field(row, "Operating Income", "OperatingIncome", "EBIT"))
-                net_incomes.append(_find_field(row, "Net Income", "NetIncome", "Net Income Common Stockholders"))
-                eps_list.append(_find_field(row, "Basic EPS", "Diluted EPS", "EPS", "BasicEPS", "DilutedEPS"))
+                revenues.append(_find_field(row, "Total Revenue", "TotalRevenue", "Revenue", "totalRevenue"))
+                gross_profits.append(_find_field(row, "Gross Profit", "GrossProfit", "grossProfit"))
+                operating_incomes.append(_find_field(row, "Operating Income", "OperatingIncome", "EBIT", "operatingIncome", "ebit"))
+                net_incomes.append(_find_field(row, "Net Income", "NetIncome", "Net Income Common Stockholders", "netIncome"))
+                eps_list.append(_find_field(row, "Basic EPS", "Diluted EPS", "EPS", "BasicEPS", "DilutedEPS", "eps", "reportedEPS"))
 
-            # Free cash flow: operating cash flow + capex (capex is negative in yfinance)
+            # Free cash flow: use direct field if available, else operating CF + capex.
+            # AV provides operatingCashflow and capitalExpenditures fields.
             free_cash_flows = []
             for cf_row in reversed(cashflow_records):
-                op_cf = _find_field(cf_row, "Operating Cash Flow", "Cash From Operations", "OperatingCashFlow")
-                capex = _find_field(cf_row, "Capital Expenditure", "CapEx", "CapitalExpenditure", "Purchase Of PPE")
-                if op_cf is not None:
+                op_cf = _find_field(cf_row, "Operating Cash Flow", "Cash From Operations", "OperatingCashFlow", "operatingCashflow")
+                capex = _find_field(cf_row, "Capital Expenditure", "CapEx", "CapitalExpenditure", "Purchase Of PPE", "capitalExpenditures")
+                fcf_direct = _find_field(cf_row, "freeCashFlow", "Free Cash Flow", "FreeCashFlow")
+                if fcf_direct is not None:
+                    free_cash_flows.append(fcf_direct)
+                elif op_cf is not None:
                     capex_val = capex or 0
                     free_cash_flows.append(_safe_float(op_cf + capex_val))
                 else:
@@ -184,8 +189,8 @@ async def run(state: GraphState) -> dict:
 
             net_debts = []
             for bs_row in reversed(balance_records):
-                total_debt = _find_field(bs_row, "Total Debt", "TotalDebt", "Long Term Debt And Capital Lease Obligation")
-                cash = _find_field(bs_row, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents")
+                total_debt = _find_field(bs_row, "Total Debt", "TotalDebt", "Long Term Debt And Capital Lease Obligation", "longTermDebt", "totalLiabilities")
+                cash = _find_field(bs_row, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents", "cashAndCashEquivalentsAtCarryingValue")
                 if total_debt is not None and cash is not None:
                     net_debts.append(_safe_float(total_debt - cash))
                 else:
