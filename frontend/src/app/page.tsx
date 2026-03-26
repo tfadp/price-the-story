@@ -8,12 +8,19 @@ import { useAnalysis } from '@/hooks/useAnalysis';
 import type { AnalyzeRequest } from '@/types/api';
 
 export default function Home() {
-  const { state, run, reset } = useAnalysis();
+  const { state, run, reset, lastHeartbeat } = useAnalysis();
   const [lastRequest, setLastRequest] = useState<AnalyzeRequest | null>(null);
+  const [startTime, setStartTime] = useState<number | null>(null);
 
   function handleSubmit(req: AnalyzeRequest) {
     setLastRequest(req);
+    setStartTime(Date.now());
     run(req);
+  }
+
+  function handleReset() {
+    reset();
+    setStartTime(null);
   }
 
   return (
@@ -27,7 +34,7 @@ export default function Home() {
           </div>
           {state.status !== 'idle' && (
             <button
-              onClick={reset}
+              onClick={handleReset}
               className="text-sm text-gray-400 hover:text-white transition-colors"
             >
               ← New analysis
@@ -62,10 +69,15 @@ export default function Home() {
                 Analyzing {lastRequest?.ticker}
               </h2>
               <p className="text-gray-500 text-sm">
-                {(lastRequest?.target_cagr ?? 0.10) * 100}% target · {lastRequest?.horizons?.includes(5) ? 5 : lastRequest?.horizons?.[1] ?? 5}yr horizon
+                Pulling data from multiple sources — this takes about 60–90 seconds
               </p>
             </div>
-            <ProgressRail stage={state.stage} progress_pct={state.progress_pct} />
+            <ProgressRail
+              stage={state.stage ?? ''}
+              progress_pct={state.progress_pct ?? 0}
+              startTime={startTime}
+              lastHeartbeat={lastHeartbeat}
+            />
           </div>
         )}
 
@@ -73,11 +85,18 @@ export default function Home() {
         {state.status === 'error' && (
           <div className="flex flex-col items-center gap-6 w-full">
             <div className="bg-red-950 border border-red-800 rounded-xl p-6 max-w-md w-full text-center">
-              <p className="text-red-300 font-medium mb-2">Analysis failed</p>
-              <p className="text-red-400 text-sm">{state.message}</p>
-              <p className="text-gray-500 text-xs mt-3">
-                Make sure the backend is running: <code className="bg-gray-900 px-1 rounded">uvicorn app.main:app --port 8000</code>
-              </p>
+              <p className="text-red-300 font-medium mb-2">Analysis didn&apos;t complete</p>
+              <p className="text-red-400 text-sm mb-4">{state.message}</p>
+              <div className="text-left text-xs text-gray-500 space-y-1">
+                <p>Things to check:</p>
+                <p>· Is the ticker a US stock? (e.g. AAPL, MSFT, NVDA)</p>
+                <p>· Is the backend running?
+                  <code className="bg-gray-900 px-1 rounded ml-1">
+                    uvicorn app.main:app --port 8000
+                  </code>
+                </p>
+                <p>· Are your API keys set in <code className="bg-gray-900 px-1 rounded">backend/.env</code>?</p>
+              </div>
             </div>
             <InputForm onSubmit={handleSubmit} disabled={false} />
           </div>

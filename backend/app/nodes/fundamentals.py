@@ -89,6 +89,11 @@ async def run(state: GraphState) -> dict:
     ticker: str = state["ticker"]
     _section_statuses: dict = {}
 
+    # Emit progress — signals parallel data phase has started
+    callback = state.get("progress_callback")
+    if callback is not None:
+        await callback("Pulling financials", "fundamentals", 20)
+
     try:
         # ------------------------------------------------------------------
         # Fetch financial statements — Financial Datasets first, yfinance fallback

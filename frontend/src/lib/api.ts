@@ -5,6 +5,7 @@ export async function analyzeTickerStream(
   onProgress: (event: import('@/types/api').ProgressEvent) => void,
   onComplete: (result: import('@/types/api').AnalyzeResponse) => void,
   onError: (message: string) => void,
+  onHeartbeat?: () => void,
 ): Promise<void> {
   const params = new URLSearchParams({
     ticker: request.ticker,
@@ -45,6 +46,10 @@ export async function analyzeTickerStream(
       // Native EventSource onerror fires with no data — backend is unreachable
       onError('Cannot reach the backend. Make sure it is running on port 8000.');
     }
+  });
+
+  eventSource.addEventListener('ping', () => {
+    onHeartbeat?.();
   });
 
   // Native onerror fires when the EventSource connection itself fails

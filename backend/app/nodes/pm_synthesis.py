@@ -23,6 +23,11 @@ async def run(state: GraphState) -> GraphState:
     """Node 11: PM Synthesis. Generates verdict_paragraph via Claude Sonnet."""
     state.setdefault("section_statuses", {})
 
+    # Emit progress — signals final synthesis phase has started
+    callback = state.get("progress_callback")
+    if callback is not None:
+        await callback("Writing verdict", "pm_synthesis", 80)
+
     try:
         val: dict = state.get("valuation") or {}
         prob: dict = state.get("probability_engine") or {}
