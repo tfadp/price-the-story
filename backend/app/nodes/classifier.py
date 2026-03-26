@@ -70,6 +70,33 @@ async def _classify(state: GraphState) -> GraphState:
             info.get("regularMarketPrice") or info.get("previousClose") or 0
         )
 
+    # Step 1b: Supplement missing market_cap / volume from Alpha Vantage when FD path was used.
+    # FD never returns volume and often omits market_cap for large caps.
+    market_cap_raw: float = info.get("marketCap", 0) or 0
+    avg_vol_raw: float = (
+        info.get("averageDailyVolume10Day")
+        or info.get("regularMarketVolume")
+        or 0
+    )
+
+    if _source == "financial_datasets" and (market_cap_raw == 0 or avg_vol_raw == 0):
+        try:
+            av_info = await get_ticker_info(ticker)
+            if market_cap_raw == 0:
+                info["marketCap"] = av_info.get("marketCap") or 0
+            if avg_vol_raw == 0:
+                info["averageDailyVolume10Day"] = (
+                    av_info.get("averageDailyVolume10Day")
+                    or av_info.get("regularMarketVolume")
+                    or 0
+                )
+            logger.info(
+                "classifier: supplemented market_cap=%s vol=%s from AV for %s",
+                info.get("marketCap"), info.get("averageDailyVolume10Day"), ticker,
+            )
+        except Exception as e:
+            logger.warning("classifier: AV supplement failed for %s: %s", ticker, e)
+
     # Step 2: Must be an equity
     quote_type = info.get("quoteType")
     if quote_type != "EQUITY":
@@ -100,11 +127,13 @@ async def _classify(state: GraphState) -> GraphState:
         except Exception:
             current_price = info.get("regularMarketPrice") or info.get("previousClose") or 0
 
-    # Annualised volatility from 10yr history
+    # Annualised volatility + history-derived avg daily volume from 10yr weekly data.
+    # We compute both in one pass since the history fetch is the expensive part.
     annualized_vol: float = 0.0
     try:
         history_data = await get_price_history(ticker, period="10y")
-        closes = [row["close"] for row in history_data.get("history", []) if row["close"]]
+        history = history_data.get("history", [])
+        closes = [row["close"] for row in history if row["close"]]
         if len(closes) >= 20:
             import statistics
 
@@ -115,6 +144,16 @@ async def _classify(state: GraphState) -> GraphState:
             ]
             daily_std = statistics.stdev(log_returns)
             annualized_vol = daily_std * math.sqrt(252)
+
+        # Derive avg daily volume from last 52 weekly bars (≈1 year).
+        # Weekly volume ÷ 5 approximates average daily volume.
+        # Only used when the API didn't supply a usable volume figure.
+        if avg_vol == 0:
+            recent_weekly_vols = [
+                row["volume"] for row in history[-52:] if row.get("volume", 0) > 0
+            ]
+            if recent_weekly_vols:
+                avg_vol = (sum(recent_weekly_vols) / len(recent_weekly_vols)) / 5
     except Exception as e:
         logger.warning("classifier: could not compute annualized vol for %s: %s", ticker, e)
 
