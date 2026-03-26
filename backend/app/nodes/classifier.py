@@ -9,7 +9,8 @@ import logging
 import math
 
 from app.state import GraphState
-from app.data.alpha_vantage_client import get_ticker_info, get_price_history, get_current_price
+from app.data.alpha_vantage_client import get_ticker_info
+from app.data.yfinance_client import get_price_history, get_current_price
 from app.data.financial_datasets_client import get_company_facts, get_snapshot_price
 
 logger = logging.getLogger(__name__)

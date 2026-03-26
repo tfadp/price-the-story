@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from app.state import GraphState
-from app.data.alpha_vantage_client import get_price_history
+from app.data.yfinance_client import get_price_history
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def run(state: GraphState) -> dict:
             _fetch_return("TLT"),
             _fetch_return("UUP"),
             _fetch_return("GLD"),
-            _fetch_current_close("VIX"),   # AV uses VIX not ^VIX
+            _fetch_current_close("^VIX"),
         )
 
         # ------------------------------------------------------------------
