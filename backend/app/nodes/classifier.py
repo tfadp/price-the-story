@@ -8,10 +8,8 @@ import asyncio
 import logging
 import math
 
-import httpx
-
 from app.state import GraphState
-from app.data.yfinance_client import get_ticker_info, get_price_history, get_current_price
+from app.data.alpha_vantage_client import get_ticker_info, get_price_history, get_current_price
 from app.data.financial_datasets_client import get_company_facts, get_snapshot_price
 
 logger = logging.getLogger(__name__)
@@ -60,43 +58,16 @@ async def _classify(state: GraphState) -> GraphState:
         # A 404 from FD means the ticker genuinely does not exist — hard fail
         if "not found" in str(fd_error).lower() or "404" in str(fd_error):
             raise
-        # Any other FD error (timeout, rate limit, etc.) — fall back to yfinance
+        # Any other FD error (timeout, rate limit, etc.) — fall back to Alpha Vantage
         logger.warning(
-            "classifier: Financial Datasets unavailable, falling back to yfinance: %s",
+            "classifier: Financial Datasets unavailable, falling back to Alpha Vantage: %s",
             fd_error,
         )
-        _source = "yfinance"
+        _source = "alpha_vantage"
         info = await get_ticker_info(ticker)
         current_price = (
             info.get("regularMarketPrice") or info.get("previousClose") or 0
         )
-
-    # Step 1b: Supplement missing market_cap / volume from yfinance when FD path was used.
-    # FD never returns volume and sometimes omits market_cap. yfinance fast_info fills the gap.
-    market_cap_raw: float = info.get("marketCap", 0) or 0
-    avg_vol_raw: float = (
-        info.get("averageDailyVolume10Day")
-        or info.get("regularMarketVolume")
-        or 0
-    )
-
-    if _source == "financial_datasets" and (market_cap_raw == 0 or avg_vol_raw == 0):
-        try:
-            yf_info = await get_ticker_info(ticker)
-            if market_cap_raw == 0:
-                info["marketCap"] = yf_info.get("marketCap") or 0
-            if avg_vol_raw == 0:
-                info["averageDailyVolume10Day"] = (
-                    yf_info.get("averageDailyVolume10Day")
-                    or yf_info.get("regularMarketVolume")
-                    or 0
-                )
-            logger.info(
-                "classifier: supplemented market_cap=%s vol=%s from yfinance for %s",
-                info.get("marketCap"), info.get("averageDailyVolume10Day"), ticker,
-            )
-        except Exception as e:
-            logger.warning("classifier: yfinance supplement failed for %s: %s", ticker, e)
 
     # Step 2: Must be an equity
     quote_type = info.get("quoteType")
@@ -121,21 +92,11 @@ async def _classify(state: GraphState) -> GraphState:
     )
 
     # If FD gave us the current price above, we already have it.
-    # For the yfinance fallback path, try a fresh fetch to be consistent.
-    if _source == "yfinance":
+    # For the AV fallback path, try a fresh fetch to be consistent.
+    if _source != "financial_datasets":
         try:
             current_price = await get_current_price(ticker)
-        except (ValueError, httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as fd_error:
-            # A 404 from FD means the ticker genuinely does not exist — hard fail
-            is_404 = (
-                isinstance(fd_error, ValueError) and (
-                    "not found" in str(fd_error).lower() or "404" in str(fd_error)
-                )
-            ) or (
-                isinstance(fd_error, httpx.HTTPStatusError) and fd_error.response.status_code == 404
-            )
-            if is_404:
-                raise ValueError(str(fd_error)) from fd_error
+        except Exception:
             current_price = info.get("regularMarketPrice") or info.get("previousClose") or 0
 
     # Annualised volatility from 10yr history

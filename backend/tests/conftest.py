@@ -55,11 +55,11 @@ def mock_external_clients():
 
     Each patch targets the name as it appears in the module that imports it
     (the 'point of use'), not the source module. This is required because all
-    nodes use `from app.data.yfinance_client import func` — creating local
+    nodes use `from app.data.alpha_vantage_client import func` — creating local
     references that bypass patches on the source module.
     """
     with (
-        # classifier.py imports
+        # classifier.py imports (from alpha_vantage_client)
         patch(
             "app.nodes.classifier.get_ticker_info",
             new_callable=AsyncMock,
@@ -75,7 +75,7 @@ def mock_external_clients():
             new_callable=AsyncMock,
             return_value=_FAKE_SNAPSHOT_PRICE,
         ),
-        # fundamentals.py imports
+        # fundamentals.py imports (from alpha_vantage_client)
         patch(
             "app.nodes.fundamentals.get_financials",
             new_callable=AsyncMock,
@@ -86,42 +86,42 @@ def mock_external_clients():
             new_callable=AsyncMock,
             return_value=_FAKE_SNAPSHOT_PRICE,
         ),
-        # valuation.py imports
+        # valuation.py imports (from alpha_vantage_client)
         patch(
             "app.nodes.valuation.get_current_price",
             new_callable=AsyncMock,
             return_value=_FAKE_SNAPSHOT_PRICE,
         ),
-        # analyst_estimates.py imports
+        # analyst_estimates.py imports (from yfinance_client — analyst data only)
         patch(
             "app.nodes.analyst_estimates.get_analyst_data",
             new_callable=AsyncMock,
             return_value={},
         ),
-        # macro.py imports
+        # macro.py imports (from alpha_vantage_client)
         patch(
             "app.nodes.macro.get_price_history",
             new_callable=AsyncMock,
             return_value=_FAKE_PRICE_HISTORY,
         ),
-        # Also patch the source module so any indirect callers are covered
+        # Also patch the source modules so any indirect callers are covered
         patch(
-            "app.data.yfinance_client.get_ticker_info",
+            "app.data.alpha_vantage_client.get_ticker_info",
             new_callable=AsyncMock,
             return_value=_FAKE_TICKER_INFO,
         ),
         patch(
-            "app.data.yfinance_client.get_price_history",
+            "app.data.alpha_vantage_client.get_price_history",
             new_callable=AsyncMock,
             return_value=_FAKE_PRICE_HISTORY,
         ),
         patch(
-            "app.data.yfinance_client.get_current_price",
+            "app.data.alpha_vantage_client.get_current_price",
             new_callable=AsyncMock,
             return_value=_FAKE_SNAPSHOT_PRICE,
         ),
         patch(
-            "app.data.yfinance_client.get_financials",
+            "app.data.alpha_vantage_client.get_financials",
             new_callable=AsyncMock,
             return_value=_FAKE_FINANCIALS,
         ),
