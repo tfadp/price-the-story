@@ -53,6 +53,28 @@ async def _get(params: dict) -> dict:
     return data
 
 
+async def get_market_cap(ticker: str) -> float:
+    """Fetch market cap from OVERVIEW — single call, respects 1 req/sec free tier.
+
+    Used by the classifier supplement block when Financial Datasets returns
+    no market cap. Returns 0.0 on any failure so the caller can fall through
+    to history-derived volume for segment classification.
+    """
+    try:
+        data = await _get({"function": "OVERVIEW", "symbol": ticker})
+        market_cap = _safe_float(data.get("MarketCapitalization")) or 0
+        if not market_cap:
+            # Fallback: shares × price
+            shares = _safe_float(data.get("SharesOutstanding")) or 0
+            price = _safe_float(data.get("50DayMovingAverage")) or 0  # proxy if needed
+            if shares and price:
+                market_cap = shares * price
+        return market_cap
+    except Exception as e:
+        logger.warning("get_market_cap (AV): failed for %s: %s", ticker, e)
+        return 0.0
+
+
 async def get_ticker_info(ticker: str) -> dict:
     """Fetch company overview + current quote in parallel.
 

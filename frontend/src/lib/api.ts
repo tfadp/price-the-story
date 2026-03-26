@@ -10,7 +10,7 @@ export async function analyzeTickerStream(
   const params = new URLSearchParams({
     ticker: request.ticker,
     target_cagr: String(request.target_cagr ?? 0.10),
-    holding_period_years: String(5),
+    holding_period_years: String(request.holding_period_years ?? 5),
     force_refresh: String(request.force_refresh ?? false),
   });
   if (request.entry_price != null) {

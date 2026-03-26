@@ -9,7 +9,7 @@ import logging
 import math
 
 from app.state import GraphState
-from app.data.alpha_vantage_client import get_ticker_info
+from app.data.alpha_vantage_client import get_market_cap, get_ticker_info
 from app.data.yfinance_client import get_price_history, get_current_price
 from app.data.financial_datasets_client import get_company_facts, get_snapshot_price
 
@@ -73,29 +73,14 @@ async def _classify(state: GraphState) -> GraphState:
     # Step 1b: Supplement missing market_cap / volume from Alpha Vantage when FD path was used.
     # FD never returns volume and often omits market_cap for large caps.
     market_cap_raw: float = info.get("marketCap", 0) or 0
-    avg_vol_raw: float = (
-        info.get("averageDailyVolume10Day")
-        or info.get("regularMarketVolume")
-        or 0
-    )
 
-    if _source == "financial_datasets" and (market_cap_raw == 0 or avg_vol_raw == 0):
-        try:
-            av_info = await get_ticker_info(ticker)
-            if market_cap_raw == 0:
-                info["marketCap"] = av_info.get("marketCap") or 0
-            if avg_vol_raw == 0:
-                info["averageDailyVolume10Day"] = (
-                    av_info.get("averageDailyVolume10Day")
-                    or av_info.get("regularMarketVolume")
-                    or 0
-                )
-            logger.info(
-                "classifier: supplemented market_cap=%s vol=%s from AV for %s",
-                info.get("marketCap"), info.get("averageDailyVolume10Day"), ticker,
-            )
-        except Exception as e:
-            logger.warning("classifier: AV supplement failed for %s: %s", ticker, e)
+    if _source == "financial_datasets" and market_cap_raw == 0:
+        # Single OVERVIEW call — avoids AV's 1 req/sec limit that fires
+        # when OVERVIEW + GLOBAL_QUOTE are requested in parallel.
+        supplemented = await get_market_cap(ticker)
+        if supplemented:
+            info["marketCap"] = supplemented
+            logger.info("classifier: supplemented market_cap=%s from AV for %s", supplemented, ticker)
 
     # Step 2: Must be an equity
     quote_type = info.get("quoteType")

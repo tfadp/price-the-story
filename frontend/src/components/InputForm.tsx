@@ -18,6 +18,7 @@ export default function InputForm({ onSubmit, disabled }: Props) {
     onSubmit({
       ticker: ticker.trim().toUpperCase(),
       target_cagr: parseFloat(targetCagr) / 100,
+      holding_period_years: parseInt(holdingPeriod),
       horizons: [1, parseInt(holdingPeriod), 5, 10].filter((v, i, a) => a.indexOf(v) === i).sort(),
     });
   }

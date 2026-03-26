@@ -12,6 +12,7 @@ export type HallucinationStatus = 'clean' | 'warnings' | 'blocked';
 export interface AnalyzeRequest {
   ticker: string;
   target_cagr?: number;
+  holding_period_years?: number;
   entry_price?: number | null;
   horizons?: number[];
   force_refresh?: boolean;
