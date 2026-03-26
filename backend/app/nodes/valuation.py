@@ -12,7 +12,8 @@ import math
 from typing import Optional
 
 from app.state import GraphState
-from app.data.yfinance_client import get_current_price, get_price_history
+from app.utils import safe_float
+from app.data.yfinance_client import get_current_price
 from app.data.financial_datasets_client import get_snapshot_price
 
 logger = logging.getLogger(__name__)
@@ -21,16 +22,6 @@ logger = logging.getLogger(__name__)
 _WACC_BASE = 0.095        # risk-free 4.5% + equity premium 4.5% + 0.5% spread
 _TERMINAL_GROWTH = 0.03
 _TERMINAL_PE_BASE = 15.0
-
-
-def _safe_float(val) -> Optional[float]:
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        return None if (math.isnan(f) or math.isinf(f)) else f
-    except (TypeError, ValueError):
-        return None
 
 
 def _dcf(
@@ -93,7 +84,7 @@ async def run(state: GraphState) -> dict:
             except ValueError as e:
                 logger.warning("valuation: could not fetch current price for %s: %s", ticker, e)
                 ticker_meta = state.get("ticker_meta") or {}
-                current_price = _safe_float(
+                current_price = safe_float(
                     ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
                 )
                 if current_price is None:
@@ -107,7 +98,7 @@ async def run(state: GraphState) -> dict:
         revenue_values: list = time_series.get("revenue", []) or []
 
         # Current (most recent annual) EPS
-        valid_eps = [_safe_float(e) for e in eps_values if _safe_float(e) is not None]
+        valid_eps = [safe_float(e) for e in eps_values if safe_float(e) is not None]
         current_eps: Optional[float] = valid_eps[-1] if valid_eps else None
 
         # ------------------------------------------------------------------
@@ -121,7 +112,7 @@ async def run(state: GraphState) -> dict:
             # Use average of available EPS estimates
             growth_estimates = []
             for cp in consensus_path:
-                eps_est = _safe_float(cp.get("eps_estimate"))
+                eps_est = safe_float(cp.get("eps_estimate"))
                 if eps_est is not None and current_eps and current_eps > 0:
                     years_out = cp.get("year", 1)
                     if isinstance(years_out, int) and years_out > 0:
@@ -147,11 +138,11 @@ async def run(state: GraphState) -> dict:
 
         if use_ps_fallback:
             ticker_meta = state.get("ticker_meta") or {}
-            ps_ratio = _safe_float(ticker_meta.get("priceToSalesTrailing12Months"))
-            shares_outstanding = _safe_float(ticker_meta.get("sharesOutstanding"))
+            ps_ratio = safe_float(ticker_meta.get("priceToSalesTrailing12Months"))
+            shares_outstanding = safe_float(ticker_meta.get("sharesOutstanding"))
 
             if ps_ratio and ps_ratio > 0 and revenue_values:
-                valid_revs = [_safe_float(r) for r in revenue_values if _safe_float(r) is not None and r > 0]
+                valid_revs = [safe_float(r) for r in revenue_values if safe_float(r) is not None and r > 0]
                 if valid_revs:
                     # Project revenue 5yr at base_growth, apply median P/S
                     median_ps = ps_ratio
@@ -231,9 +222,10 @@ async def run(state: GraphState) -> dict:
             )
 
             # Sentiment premium: check if 12mo price return > 2x EPS growth
+            # Use price history already fetched by classifier — avoids a redundant network call
             try:
-                history = await get_price_history(ticker, period="1y")
-                closes = [row["close"] for row in history.get("history", []) if row["close"]]
+                history = state.get("price_history") or []
+                closes = [row["close"] for row in history if row.get("close")]
                 if len(closes) >= 2:
                     price_return_1yr = (closes[-1] / closes[0]) - 1
                     if price_return_1yr > base_growth * 2:

@@ -8,23 +8,30 @@ yfinance is the complete fallback if Perplexity is unavailable.
 Never crashes the pipeline — all exceptions caught and logged.
 """
 import logging
-import math
 from typing import Optional
 
 from app.state import GraphState
+from app.utils import safe_float
 from app.data.yfinance_client import get_analyst_data
 
 logger = logging.getLogger(__name__)
 
+# Module-level lazy singleton — initialized once on first use, not at import time.
+_llm_haiku: object = None
 
-def _safe_float(val) -> Optional[float]:
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        return None if (math.isnan(f) or math.isinf(f)) else f
-    except (TypeError, ValueError):
-        return None
+
+def _get_llm_haiku():
+    """Return a cached Claude Haiku client. Initialized once on first call."""
+    global _llm_haiku
+    if _llm_haiku is None:
+        from langchain_anthropic import ChatAnthropic
+        from app.config import settings
+        _llm_haiku = ChatAnthropic(
+            model="claude-haiku-4-5-20251001",
+            api_key=settings.anthropic_api_key,
+            max_tokens=150,
+        )
+    return _llm_haiku
 
 
 async def run(state: GraphState) -> dict:
@@ -126,8 +133,8 @@ async def _fetch_from_perplexity(ticker: str, api_key: str) -> Optional[dict]:
     sell_count = int(data.get("sell_count") or 0)
     total = buy_count + hold_count + sell_count
 
-    avg_target = _safe_float(data.get("avg_price_target"))
-    median_target = _safe_float(data.get("median_price_target"))
+    avg_target = safe_float(data.get("avg_price_target"))
+    median_target = safe_float(data.get("median_price_target"))
     narrative = str(data.get("narrative") or "").strip()
     top_analysts = data.get("top_analysts") or []
 
@@ -147,7 +154,7 @@ async def _fetch_from_perplexity(ticker: str, api_key: str) -> Optional[dict]:
                 "analyst_name": "Unknown",
                 "firm": firm,
                 "current_rating": str(a.get("rating") or ""),
-                "current_price_target": _safe_float(a.get("price_target")),
+                "current_price_target": safe_float(a.get("price_target")),
                 "accuracy_score": None,
                 "graded_calls_count": 0,
             })
@@ -196,12 +203,12 @@ async def _fetch_from_yfinance(ticker: str, settings) -> dict:
     period_map: dict[str, dict] = {}
     for row in earnings_est:
         period = str(row.get("period", row.get("0", "")))
-        period_map.setdefault(period, {})["eps_estimate"] = _safe_float(
+        period_map.setdefault(period, {})["eps_estimate"] = safe_float(
             row.get("avg") or row.get("Avg") or row.get("mean")
         )
     for row in revenue_est:
         period = str(row.get("period", row.get("0", "")))
-        period_map.setdefault(period, {})["revenue_estimate"] = _safe_float(
+        period_map.setdefault(period, {})["revenue_estimate"] = safe_float(
             row.get("avg") or row.get("Avg") or row.get("mean")
         )
 
@@ -224,8 +231,8 @@ async def _fetch_from_yfinance(ticker: str, settings) -> dict:
     if eps_trend:
         # Look for current vs 3-month-ago fields
         for row in eps_trend:
-            current_est = _safe_float(row.get("current") or row.get("0w") or row.get("current_estimate"))
-            three_mo = _safe_float(row.get("3monthsago") or row.get("3m") or row.get("3_months_ago"))
+            current_est = safe_float(row.get("current") or row.get("0w") or row.get("current_estimate"))
+            three_mo = safe_float(row.get("3monthsago") or row.get("3m") or row.get("3_months_ago"))
             if current_est is not None and three_mo is not None and three_mo != 0:
                 change = (current_est - three_mo) / abs(three_mo)
                 if change > 0.02:
@@ -243,7 +250,7 @@ async def _fetch_from_yfinance(ticker: str, settings) -> dict:
     earnings_hist: list[dict] = data.get("earnings_history", []) or []
     for row in earnings_hist[-4:]:
         quarter = str(row.get("quarter", row.get("date", "N/A")))
-        eps_surprise = _safe_float(row.get("surprisePercent") or row.get("epsSurprisePercent"))
+        eps_surprise = safe_float(row.get("surprisePercent") or row.get("epsSurprisePercent"))
         if eps_surprise is not None:
             surprise_history.append({
                 "quarter": quarter,
@@ -310,9 +317,9 @@ async def _fetch_from_yfinance(ticker: str, settings) -> dict:
     avg_target_price: Optional[float] = None
     price_targets_raw = data.get("price_targets") or {}
     if isinstance(price_targets_raw, dict):
-        avg_target_price = _safe_float(price_targets_raw.get("mean") or price_targets_raw.get("average"))
+        avg_target_price = safe_float(price_targets_raw.get("mean") or price_targets_raw.get("average"))
     elif isinstance(price_targets_raw, list) and price_targets_raw:
-        targets = [_safe_float(r.get("priceTarget") or r.get("price_target")) for r in price_targets_raw]
+        targets = [safe_float(r.get("priceTarget") or r.get("price_target")) for r in price_targets_raw]
         valid_targets = [t for t in targets if t is not None]
         if valid_targets:
             avg_target_price = sum(valid_targets) / len(valid_targets)
@@ -324,14 +331,9 @@ async def _fetch_from_yfinance(ticker: str, settings) -> dict:
 
     if settings.anthropic_api_key and (rating_summary or avg_target_price):
         try:
-            from langchain_anthropic import ChatAnthropic
             from langchain_core.messages import HumanMessage
 
-            llm = ChatAnthropic(
-                model="claude-haiku-4-5-20251001",
-                api_key=settings.anthropic_api_key,
-                max_tokens=150,
-            )
+            llm = _get_llm_haiku()
             prompt = (
                 f"In 2 sentences, summarise analyst sentiment for {ticker}. "
                 f"Rating breakdown: buy={buy_count}, hold={hold_count}, sell={sell_count}. "

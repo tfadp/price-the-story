@@ -8,22 +8,12 @@ using scenario-weighted EPS projections.
 Never crashes the pipeline — all exceptions caught and logged.
 """
 import logging
-import math
 from typing import Optional
 
 from app.state import GraphState
+from app.utils import safe_float
 
 logger = logging.getLogger(__name__)
-
-
-def _safe_float(val) -> Optional[float]:
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        return None if (math.isnan(f) or math.isinf(f)) else f
-    except (TypeError, ValueError):
-        return None
 
 
 def _project_price(
@@ -73,11 +63,11 @@ async def run(state: GraphState) -> GraphState:
         macro: dict = state.get("macro") or {}
 
         current_price = (
-            _safe_float(val.get("current_price"))
-            or _safe_float((state.get("ticker_meta") or {}).get("regularMarketPrice"))
+            safe_float(val.get("current_price"))
+            or safe_float((state.get("ticker_meta") or {}).get("regularMarketPrice"))
             or 100.0
         )
-        entry_price = _safe_float(state.get("entry_price")) or current_price
+        entry_price = safe_float(state.get("entry_price")) or current_price
         target_cagr: float = state.get("target_cagr", 0.10) or 0.10
 
         efficiency_verdict = None
@@ -117,10 +107,10 @@ async def run(state: GraphState) -> GraphState:
         time_series: dict = fund.get("time_series", {}) if fund else {}
 
         eps_values: list = time_series.get("eps", []) or []
-        valid_eps = [_safe_float(e) for e in eps_values if _safe_float(e) is not None]
+        valid_eps = [safe_float(e) for e in eps_values if safe_float(e) is not None]
         current_eps: Optional[float] = valid_eps[-1] if valid_eps else None
 
-        base_growth: float = _safe_float(val.get("_base_growth")) or 0.08
+        base_growth: float = safe_float(val.get("_base_growth")) or 0.08
         bull_growth: float = base_growth * 1.25
         bear_growth: float = base_growth * 0.60
 

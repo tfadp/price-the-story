@@ -115,6 +115,8 @@ async def _classify(state: GraphState) -> GraphState:
     # Annualised volatility + history-derived avg daily volume from 10yr weekly data.
     # We compute both in one pass since the history fetch is the expensive part.
     annualized_vol: float = 0.0
+    # Initialized before the try so Step 7 can always read it (empty list on failure).
+    history_data: dict = {}
     try:
         history_data = await get_price_history(ticker, period="10y")
         history = history_data.get("history", [])
@@ -174,6 +176,9 @@ async def _classify(state: GraphState) -> GraphState:
     state["data_quality"] = data_quality
     state["is_us_equity"] = True
     state["ticker_meta"] = info
+    # Stash the 10yr history so downstream nodes (e.g. valuation) can reuse it
+    # without making a second network call.
+    state["price_history"] = history_data.get("history", [])
 
     # Step 8: Emit progress if callback provided
     callback = state.get("progress_callback")

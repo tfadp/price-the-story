@@ -35,6 +35,7 @@ class GraphState(TypedDict, total=False):
     data_quality: Optional[str]        # high | medium | low
     is_us_equity: bool
     ticker_meta: Optional[dict]        # raw yfinance .info snapshot
+    price_history: list                # OHLCV records fetched by classifier; reused by valuation
 
     # ---- Node 2: Fundamentals -------------------------------------------
     fundamentals: Optional[dict]

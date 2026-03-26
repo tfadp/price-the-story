@@ -11,10 +11,10 @@ logged, and a "failed" status is written to state.
 """
 import asyncio
 import logging
-import math
 from typing import Optional
 
 from app.state import GraphState
+from app.utils import safe_float
 from app.data.yfinance_client import get_financials, get_current_price
 from app.data.financial_datasets_client import (
     get_income_statements,
@@ -25,16 +25,23 @@ from app.data.financial_datasets_client import (
 
 logger = logging.getLogger(__name__)
 
+# Module-level lazy singleton — initialized once on first use, not at import time.
+# Avoids reconstructing the client on every node invocation.
+_llm_haiku: object = None
 
-def _safe_float(val) -> Optional[float]:
-    """Convert a value to float, returning None on any error."""
-    try:
-        if val is None:
-            return None
-        f = float(val)
-        return None if math.isnan(f) or math.isinf(f) else f
-    except (TypeError, ValueError):
-        return None
+
+def _get_llm_haiku():
+    """Return a cached Claude Haiku client. Initialized once on first call."""
+    global _llm_haiku
+    if _llm_haiku is None:
+        from langchain_anthropic import ChatAnthropic
+        from app.config import settings
+        _llm_haiku = ChatAnthropic(
+            model="claude-haiku-4-5-20251001",
+            api_key=settings.anthropic_api_key,
+            max_tokens=256,
+        )
+    return _llm_haiku
 
 
 def _extract_series(records: list[dict], field_name: str) -> list[Optional[float]]:
@@ -50,7 +57,7 @@ def _extract_series(records: list[dict], field_name: str) -> list[Optional[float
                 if key.lower().replace(" ", "_") == field_name.lower().replace(" ", "_"):
                     val = row[key]
                     break
-        values.append(_safe_float(val))
+        values.append(safe_float(val))
     return values
 
 
@@ -60,7 +67,7 @@ def _find_field(row: dict, *candidates: str) -> Optional[float]:
     for candidate in candidates:
         val = lower_row.get(candidate.lower())
         if val is not None:
-            return _safe_float(val)
+            return safe_float(val)
     return None
 
 
@@ -116,37 +123,37 @@ async def run(state: GraphState) -> dict:
 
         if _use_fd:
             # Build time series directly from FD snake_case field names
-            revenues: list[Optional[float]] = [_safe_float(r.get("revenue")) for r in income_fd]
-            gross_profits: list[Optional[float]] = [_safe_float(r.get("gross_profit")) for r in income_fd]
-            operating_incomes: list[Optional[float]] = [_safe_float(r.get("operating_income")) for r in income_fd]
-            net_incomes: list[Optional[float]] = [_safe_float(r.get("net_income")) for r in income_fd]
+            revenues: list[Optional[float]] = [safe_float(r.get("revenue")) for r in income_fd]
+            gross_profits: list[Optional[float]] = [safe_float(r.get("gross_profit")) for r in income_fd]
+            operating_incomes: list[Optional[float]] = [safe_float(r.get("operating_income")) for r in income_fd]
+            net_incomes: list[Optional[float]] = [safe_float(r.get("net_income")) for r in income_fd]
             # Prefer diluted EPS; eps field also acceptable
             eps_list: list[Optional[float]] = [
-                _safe_float(r.get("eps_diluted") or r.get("eps")) for r in income_fd
+                safe_float(r.get("eps_diluted") or r.get("eps")) for r in income_fd
             ]
 
             # FD provides free_cash_flow directly — no need to recompute from parts
             free_cash_flows: list[Optional[float]] = [
-                _safe_float(r.get("free_cash_flow")) for r in cashflow_fd
+                safe_float(r.get("free_cash_flow")) for r in cashflow_fd
             ]
 
             net_debts: list[Optional[float]] = []
             for bs_row in balance_fd:
-                total_debt = _safe_float(bs_row.get("total_debt"))
-                cash = _safe_float(bs_row.get("cash_and_equivalents"))
+                total_debt = safe_float(bs_row.get("total_debt"))
+                cash = safe_float(bs_row.get("cash_and_equivalents"))
                 if total_debt is not None and cash is not None:
-                    net_debts.append(_safe_float(total_debt - cash))
+                    net_debts.append(safe_float(total_debt - cash))
                 else:
                     net_debts.append(None)
 
             # ROIC: net_income / (total_equity + total_debt) — approximate
             roic_list: list[Optional[float]] = []
             for ni, bs_row in zip(net_incomes, balance_fd):
-                equity = _safe_float(bs_row.get("total_equity"))
-                ltd = _safe_float(bs_row.get("total_debt"))
+                equity = safe_float(bs_row.get("total_equity"))
+                ltd = safe_float(bs_row.get("total_debt"))
                 if ni is not None and equity is not None:
                     denom = (equity or 0) + (ltd or 0)
-                    roic_list.append(_safe_float(ni / denom) if denom else None)
+                    roic_list.append(safe_float(ni / denom) if denom else None)
                 else:
                     roic_list.append(None)
         else:
@@ -183,7 +190,7 @@ async def run(state: GraphState) -> dict:
                     free_cash_flows.append(fcf_direct)
                 elif op_cf is not None:
                     capex_val = capex or 0
-                    free_cash_flows.append(_safe_float(op_cf + capex_val))
+                    free_cash_flows.append(safe_float(op_cf + capex_val))
                 else:
                     free_cash_flows.append(None)
 
@@ -192,7 +199,7 @@ async def run(state: GraphState) -> dict:
                 total_debt = _find_field(bs_row, "Total Debt", "TotalDebt", "Long Term Debt And Capital Lease Obligation", "longTermDebt", "totalLiabilities")
                 cash = _find_field(bs_row, "Cash And Cash Equivalents", "Cash", "CashAndCashEquivalents", "cashAndCashEquivalentsAtCarryingValue")
                 if total_debt is not None and cash is not None:
-                    net_debts.append(_safe_float(total_debt - cash))
+                    net_debts.append(safe_float(total_debt - cash))
                 else:
                     net_debts.append(None)
 
@@ -203,7 +210,7 @@ async def run(state: GraphState) -> dict:
                 ltd = _find_field(bs_row, "Long Term Debt", "LongTermDebt")
                 if ni is not None and equity is not None:
                     denom = (equity or 0) + (ltd or 0)
-                    roic_list.append(_safe_float(ni / denom) if denom else None)
+                    roic_list.append(safe_float(ni / denom) if denom else None)
                 else:
                     roic_list.append(None)
 
@@ -214,8 +221,8 @@ async def run(state: GraphState) -> dict:
         operating_margins: list[Optional[float]] = []
         for rev, gp, oi in zip(revenues, gross_profits, operating_incomes):
             if rev and rev != 0:
-                gross_margins.append(_safe_float((gp or 0) / rev) if gp is not None else None)
-                operating_margins.append(_safe_float((oi or 0) / rev) if oi is not None else None)
+                gross_margins.append(safe_float((gp or 0) / rev) if gp is not None else None)
+                operating_margins.append(safe_float((oi or 0) / rev) if oi is not None else None)
             else:
                 gross_margins.append(None)
                 operating_margins.append(None)
@@ -224,7 +231,7 @@ async def run(state: GraphState) -> dict:
         # Factor scores (normalised 0–1)
         # ------------------------------------------------------------------
         ticker_meta: dict = state.get("ticker_meta") or {}
-        pe_ratio = _safe_float(ticker_meta.get("trailingPE") or ticker_meta.get("forwardPE"))
+        pe_ratio = safe_float(ticker_meta.get("trailingPE") or ticker_meta.get("forwardPE"))
 
         # Value score: score = max(0, min(1, 1 - pe/30))
         value_score: Optional[float] = None
@@ -253,7 +260,7 @@ async def run(state: GraphState) -> dict:
             try:
                 current_price = await get_current_price(ticker)
             except ValueError:
-                current_price = _safe_float(
+                current_price = safe_float(
                     ticker_meta.get("regularMarketPrice") or ticker_meta.get("previousClose")
                 )
 
@@ -279,14 +286,9 @@ async def run(state: GraphState) -> dict:
         business_summary: str
         if settings.anthropic_api_key:
             try:
-                from langchain_anthropic import ChatAnthropic
                 from langchain_core.messages import HumanMessage
 
-                llm = ChatAnthropic(
-                    model="claude-haiku-4-5-20251001",
-                    api_key=settings.anthropic_api_key,
-                    max_tokens=256,
-                )
+                llm = _get_llm_haiku()
                 prompt = (
                     f"In 2-3 sentences, describe {ticker}'s business model based on: "
                     f"Revenue trend (most recent 3yr): {[_fmt_revenue(r) for r in recent_revenues]}. "
@@ -337,7 +339,7 @@ async def run(state: GraphState) -> dict:
         recent_equities: list[Optional[float]] = []
         if _use_fd:
             for bs_row in balance_fd[-3:]:
-                recent_equities.append(_safe_float(bs_row.get("total_equity")))
+                recent_equities.append(safe_float(bs_row.get("total_equity")))
         else:
             for bs_row in reversed(balance_records[-3:]):
                 eq = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
