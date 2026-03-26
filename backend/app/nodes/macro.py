@@ -14,6 +14,23 @@ from app.data.yfinance_client import get_price_history
 
 logger = logging.getLogger(__name__)
 
+# Module-level lazy singleton — initialized once on first use, not at import time.
+_llm_haiku: object = None
+
+
+def _get_llm_haiku():
+    """Return a cached Claude Haiku client. Initialized once on first call."""
+    global _llm_haiku
+    if _llm_haiku is None:
+        from langchain_anthropic import ChatAnthropic
+        from app.config import settings
+        _llm_haiku = ChatAnthropic(
+            model="claude-haiku-4-5-20251001",
+            api_key=settings.anthropic_api_key,
+            max_tokens=100,
+        )
+    return _llm_haiku
+
 
 def _six_month_return(history: list[dict]) -> Optional[float]:
     """Compute 6-month return from a list of OHLCV dicts (oldest first)."""
@@ -110,15 +127,10 @@ async def run(state: GraphState) -> dict:
         try:
             from app.config import settings
             if settings.anthropic_api_key and ticker:
-                from langchain_anthropic import ChatAnthropic
                 from langchain_core.messages import HumanMessage
 
                 impact_names = [s.get("scenario", "") for s in scenario_impacts]
-                llm = ChatAnthropic(
-                    model="claude-haiku-4-5-20251001",
-                    api_key=settings.anthropic_api_key,
-                    max_tokens=100,
-                )
+                llm = _get_llm_haiku()
                 prompt = (
                     f"In exactly 2 sentences, explain how the current macro regime "
                     f"({macro_regime.replace('_', ' ')}) affects {ticker} specifically. "

@@ -20,6 +20,36 @@ _BASE_URL = "https://api.financialdatasets.ai"
 # Seconds before we give up on a single HTTP request
 _TIMEOUT_S = 15
 
+# Module-level shared client — reuses TCP connections across parallel calls.
+# Lazy-initialized on first use; reset to None when a new event loop is
+# detected (e.g. between test runs) so the pool does not bind to a dead loop.
+_FD_CLIENT: httpx.AsyncClient | None = None
+_FD_CLIENT_LOOP_ID: int | None = None
+
+
+def _get_fd_client() -> httpx.AsyncClient:
+    """Return the shared AsyncClient.
+
+    Creates a new client when first called, or when the running event loop has
+    changed (detected by loop object identity). This keeps connection pooling in
+    production (single long-lived loop) while staying safe in test environments
+    that create a fresh loop per test.
+    """
+    global _FD_CLIENT, _FD_CLIENT_LOOP_ID
+    import asyncio
+    try:
+        current_loop_id = id(asyncio.get_event_loop())
+    except RuntimeError:
+        current_loop_id = None
+    if _FD_CLIENT is None or current_loop_id != _FD_CLIENT_LOOP_ID:
+        _FD_CLIENT = httpx.AsyncClient(
+            base_url=_BASE_URL,
+            timeout=_TIMEOUT_S,
+            follow_redirects=True,
+        )
+        _FD_CLIENT_LOOP_ID = current_loop_id
+    return _FD_CLIENT
+
 
 def _headers() -> dict:
     """Build auth headers from live config — called inside request functions.
@@ -35,11 +65,9 @@ async def get_company_facts(ticker: str) -> dict:
 
     Raises ValueError on 404 (ticker not found) or 429 (rate limited).
     """
-    url = f"{_BASE_URL}/company/facts"
     params = {"ticker": ticker}
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
-        resp = await client.get(url, headers=_headers(), params=params)
+    resp = await _get_fd_client().get("/company/facts", headers=_headers(), params=params)
 
     if resp.status_code == 404:
         raise ValueError(f"Ticker not found: {ticker} (Financial Datasets returned 404)")
@@ -64,11 +92,9 @@ async def get_snapshot_price(ticker: str) -> float:
     Returns the snapshot.price as a float.
     Raises ValueError if no price is available or the ticker is not found.
     """
-    url = f"{_BASE_URL}/prices/snapshot"
     params = {"ticker": ticker}
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
-        resp = await client.get(url, headers=_headers(), params=params)
+    resp = await _get_fd_client().get("/prices/snapshot", headers=_headers(), params=params)
 
     if resp.status_code == 404:
         raise ValueError(f"Ticker not found: {ticker} (Financial Datasets snapshot returned 404)")
@@ -94,12 +120,10 @@ async def get_income_statements(ticker: str, limit: int = 5) -> list[dict]:
     Returns an empty list on any failure — this data is supplementary and
     the pipeline must continue without it.
     """
-    url = f"{_BASE_URL}/financials/income-statements"
     params = {"ticker": ticker, "period": "annual", "limit": limit}
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
-            resp = await client.get(url, headers=_headers(), params=params)
+        resp = await _get_fd_client().get("/financials/income-statements", headers=_headers(), params=params)
         resp.raise_for_status()
         data = resp.json()
         return data.get("income_statements") or []
@@ -114,12 +138,10 @@ async def get_balance_sheets(ticker: str, limit: int = 5) -> list[dict]:
     Returns an empty list on any failure — this data is supplementary and
     the pipeline must continue without it.
     """
-    url = f"{_BASE_URL}/financials/balance-sheets"
     params = {"ticker": ticker, "period": "annual", "limit": limit}
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
-            resp = await client.get(url, headers=_headers(), params=params)
+        resp = await _get_fd_client().get("/financials/balance-sheets", headers=_headers(), params=params)
         resp.raise_for_status()
         data = resp.json()
         return data.get("balance_sheets") or []
@@ -134,12 +156,10 @@ async def get_cash_flow_statements(ticker: str, limit: int = 5) -> list[dict]:
     Returns an empty list on any failure — this data is supplementary and
     the pipeline must continue without it.
     """
-    url = f"{_BASE_URL}/financials/cash-flow-statements"
     params = {"ticker": ticker, "period": "annual", "limit": limit}
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT_S, follow_redirects=True) as client:
-            resp = await client.get(url, headers=_headers(), params=params)
+        resp = await _get_fd_client().get("/financials/cash-flow-statements", headers=_headers(), params=params)
         resp.raise_for_status()
         data = resp.json()
         return data.get("cash_flow_statements") or []
