@@ -112,11 +112,19 @@ async def get_ticker_info(ticker: str) -> dict:
         """Use fast_info — fewer HTTP calls, less rate-limit risk."""
         t = yf.Ticker(ticker, session=_SESSION)
         fi = t.fast_info
+        # fast_info.market_cap is None in yfinance 0.2.x for many tickers.
+        # Compute from shares × last_price as a reliable fallback.
+        market_cap = getattr(fi, "market_cap", None)
+        if not market_cap:
+            shares = getattr(fi, "shares", None)
+            last_price = getattr(fi, "last_price", None)
+            if shares and last_price:
+                market_cap = float(shares) * float(last_price)
         # Map fast_info attributes to the .info key names the rest of the app expects
         return {
             "quoteType": getattr(fi, "quote_type", None),
             "exchange": getattr(fi, "exchange", None),
-            "marketCap": getattr(fi, "market_cap", None),
+            "marketCap": market_cap,
             "regularMarketPrice": getattr(fi, "last_price", None),
             "regularMarketVolume": getattr(fi, "three_month_average_volume", None),
             "averageDailyVolume10Day": getattr(fi, "three_month_average_volume", None),
