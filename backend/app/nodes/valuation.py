@@ -12,7 +12,7 @@ import math
 from typing import Optional
 
 from app.state import GraphState
-from app.data.alpha_vantage_client import get_current_price
+from app.data.yfinance_client import get_current_price, get_price_history
 from app.data.financial_datasets_client import get_snapshot_price
 
 logger = logging.getLogger(__name__)
@@ -232,7 +232,6 @@ async def run(state: GraphState) -> dict:
 
             # Sentiment premium: check if 12mo price return > 2x EPS growth
             try:
-                from app.data.alpha_vantage_client import get_price_history
                 history = await get_price_history(ticker, period="1y")
                 closes = [row["close"] for row in history.get("history", []) if row["close"]]
                 if len(closes) >= 2:

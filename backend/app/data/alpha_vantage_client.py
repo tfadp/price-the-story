@@ -1,20 +1,18 @@
 """
 Async REST client for Alpha Vantage (alphavantage.co).
 
-Primary replacement for yfinance for all market data:
-  - get_ticker_info    → OVERVIEW + GLOBAL_QUOTE (parallel)
-  - get_current_price  → GLOBAL_QUOTE
-  - get_price_history  → TIME_SERIES_DAILY (≤1y) or TIME_SERIES_WEEKLY (>1y)
-  - get_financials     → INCOME_STATEMENT + BALANCE_SHEET + CASH_FLOW (parallel)
+Used for ONE thing: get_ticker_info, which calls the OVERVIEW + GLOBAL_QUOTE
+endpoints to obtain company metadata (exchange, market cap, name) when
+Financial Datasets is unavailable.
 
-yfinance is kept ONLY for get_analyst_data (AV has no analyst estimates endpoint).
+All other market data (current price, price history, financials) is handled
+by yfinance_client.py.
 
 All functions are async via httpx.AsyncClient. The API key is read from
 settings at call time so tests can patch it freely.
 """
 import asyncio
 import logging
-from datetime import date, timedelta
 from typing import Optional
 
 import httpx
@@ -58,8 +56,8 @@ async def _get(params: dict) -> dict:
 async def get_ticker_info(ticker: str) -> dict:
     """Fetch company overview + current quote in parallel.
 
-    Returns a dict with the same keys that yfinance_client.get_ticker_info()
-    returned so callers need no changes.
+    Returns a dict with exchange, market cap, price, and name fields so the
+    classifier can validate the ticker without yfinance.
 
     Raises ValueError if the ticker is not found or AV returns an error.
     """
@@ -104,122 +102,3 @@ async def get_ticker_info(ticker: str) -> dict:
         "currency": overview.get("Currency", "USD"),
         "_from_alpha_vantage": True,
     }
-
-
-async def get_current_price(ticker: str) -> float:
-    """Return the most recent price from GLOBAL_QUOTE.
-
-    Raises ValueError if unavailable.
-    """
-    data = await _get({"function": "GLOBAL_QUOTE", "symbol": ticker})
-    quote = data.get("Global Quote", {})
-    price = _safe_float(quote.get("05. price"))
-    if price is None:
-        raise ValueError(f"Current price unavailable for {ticker} (Alpha Vantage)")
-    return price
-
-
-async def get_price_history(ticker: str, period: str = "10y") -> dict:
-    """Return OHLCV price history as a list of dicts sorted oldest-first.
-
-    Each dict: {date, open, high, low, close, volume}.
-    Uses TIME_SERIES_WEEKLY for periods > 1 year (cheaper, sufficient for vol calc).
-    Uses TIME_SERIES_DAILY for periods ≤ 1 year (more granular).
-
-    Returns {"history": []} on failure (non-critical).
-    """
-    # Determine years requested
-    period_years = {"5d": 0, "1mo": 0, "3mo": 0, "6mo": 0, "1y": 1, "2y": 2, "5y": 5, "10y": 10}
-    years = period_years.get(period, 10)
-
-    try:
-        if years > 1:
-            # Weekly data — full history (20+ years)
-            data = await _get({
-                "function": "TIME_SERIES_WEEKLY",
-                "symbol": ticker,
-                "outputsize": "full",
-            })
-            series = data.get("Weekly Time Series", {})
-            open_k, high_k, low_k, close_k, vol_k = "1. open", "2. high", "3. low", "4. close", "5. volume"
-        else:
-            # Daily data — full for ≤1y means we get the last 20 years but slice to needed range
-            data = await _get({
-                "function": "TIME_SERIES_DAILY",
-                "symbol": ticker,
-                "outputsize": "full",
-            })
-            series = data.get("Time Series (Daily)", {})
-            open_k, high_k, low_k, close_k, vol_k = "1. open", "2. high", "3. low", "4. close", "5. volume"
-
-        if not series:
-            return {"history": []}
-
-        # Cutoff date for filtering
-        cutoff = date.today() - timedelta(days=max(years * 365, 7))
-
-        records = []
-        for date_str, bar in series.items():
-            try:
-                bar_date = date.fromisoformat(date_str)
-            except ValueError:
-                continue
-            if bar_date < cutoff:
-                continue
-            records.append({
-                "date": date_str,
-                "open": _safe_float(bar.get(open_k)) or 0,
-                "high": _safe_float(bar.get(high_k)) or 0,
-                "low": _safe_float(bar.get(low_k)) or 0,
-                "close": _safe_float(bar.get(close_k)) or 0,
-                "volume": int(_safe_float(bar.get(vol_k)) or 0),
-            })
-
-        # Sort oldest-first (AV returns newest-first)
-        records.sort(key=lambda r: r["date"])
-        return {"history": records}
-
-    except Exception as e:
-        logger.warning("get_price_history (AV): failed for %s period=%s: %s", ticker, period, e)
-        return {"history": []}
-
-
-async def get_financials(ticker: str) -> dict:
-    """Return annual income statement, balance sheet, and cash flow.
-
-    Keys: income_stmt, balance_sheet, cashflow — each is a list[dict].
-    Field names use Alpha Vantage's camelCase convention, which is handled
-    by fundamentals.py's _find_field() case-insensitive lookup.
-    Returns empty lists for each on failure (non-critical).
-    """
-    try:
-        income_data, balance_data, cashflow_data = await asyncio.gather(
-            _get({"function": "INCOME_STATEMENT", "symbol": ticker}),
-            _get({"function": "BALANCE_SHEET", "symbol": ticker}),
-            _get({"function": "CASH_FLOW", "symbol": ticker}),
-            return_exceptions=True,
-        )
-
-        def _parse_annual(data, key: str = "annualReports") -> list[dict]:
-            if isinstance(data, Exception):
-                return []
-            reports = data.get(key, [])
-            # Convert all string numbers to floats; keep strings that are non-numeric
-            result = []
-            for report in reports:
-                row = {}
-                for k, v in report.items():
-                    f = _safe_float(v)
-                    row[k] = f if f is not None else v
-                result.append(row)
-            return result
-
-        return {
-            "income_stmt": _parse_annual(income_data),
-            "balance_sheet": _parse_annual(balance_data),
-            "cashflow": _parse_annual(cashflow_data),
-        }
-
-    except Exception as e:
-        logger.warning("get_financials (AV): failed for %s: %s", ticker, e)
-        return {"income_stmt": [], "balance_sheet": [], "cashflow": []}

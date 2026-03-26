@@ -15,7 +15,7 @@ import math
 from typing import Optional
 
 from app.state import GraphState
-from app.data.alpha_vantage_client import get_financials, get_current_price
+from app.data.yfinance_client import get_financials, get_current_price
 from app.data.financial_datasets_client import (
     get_income_statements,
     get_balance_sheets,

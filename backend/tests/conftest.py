@@ -55,8 +55,8 @@ def mock_external_clients():
 
     Each patch targets the name as it appears in the module that imports it
     (the 'point of use'), not the source module. This is required because all
-    nodes use `from app.data.alpha_vantage_client import func` — creating local
-    references that bypass patches on the source module.
+    nodes use `from app.data.X import func` — creating local references that
+    bypass patches on the source module.
     """
     with (
         # classifier.py imports (from alpha_vantage_client)
@@ -111,17 +111,17 @@ def mock_external_clients():
             return_value=_FAKE_TICKER_INFO,
         ),
         patch(
-            "app.data.alpha_vantage_client.get_price_history",
+            "app.data.yfinance_client.get_price_history",
             new_callable=AsyncMock,
             return_value=_FAKE_PRICE_HISTORY,
         ),
         patch(
-            "app.data.alpha_vantage_client.get_current_price",
+            "app.data.yfinance_client.get_current_price",
             new_callable=AsyncMock,
             return_value=_FAKE_SNAPSHOT_PRICE,
         ),
         patch(
-            "app.data.alpha_vantage_client.get_financials",
+            "app.data.yfinance_client.get_financials",
             new_callable=AsyncMock,
             return_value=_FAKE_FINANCIALS,
         ),

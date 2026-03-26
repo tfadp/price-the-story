@@ -1,14 +1,18 @@
 """
-Thin async wrapper around yfinance — analyst data ONLY.
+Async wrapper around yfinance.
 
-All market data (ticker info, price history, financials, current price) has
-been moved to alpha_vantage_client.py. This file exists solely to provide
-get_analyst_data, which returns analyst recommendations, price targets, and
-earnings forecasts. yfinance is the only available source for this data in v1
-since Alpha Vantage has no analyst estimates endpoint.
+Provides:
+  - get_current_price  — regularMarketPrice / currentPrice / previousClose
+  - get_price_history  — OHLCV history as a list of dicts
+  - get_financials     — income statement, balance sheet, cash flow
+  - get_analyst_data   — analyst recommendations, price targets, earnings
+
+Alpha Vantage is used ONLY for get_ticker_info (OVERVIEW endpoint) to obtain
+market cap when Financial Datasets returns None. All other market data comes
+from yfinance.
 
 All calls use asyncio.to_thread so they don't block the event loop.
-Every call is wrapped in asyncio.wait_for with a 10-second timeout.
+Every call is wrapped in asyncio.wait_for with a 15-second timeout.
 """
 import asyncio
 import logging
@@ -60,6 +64,103 @@ def _df_to_records(df: pd.DataFrame) -> list[dict]:
             row_dict[col_str] = None if pd.isna(val) else float(val)
         records.append(row_dict)
     return records
+
+
+async def get_current_price(ticker: str) -> float:
+    """Return the most recent market price for a ticker.
+
+    Tries regularMarketPrice, then currentPrice, then previousClose.
+    Raises ValueError if all three are None (e.g. bad ticker or yfinance outage).
+    """
+    def _fetch() -> float:
+        t = yf.Ticker(ticker, session=_SESSION)
+        info = t.info or {}
+        price = (
+            info.get("regularMarketPrice")
+            or info.get("currentPrice")
+            or info.get("previousClose")
+        )
+        if price is None:
+            raise ValueError(f"Current price unavailable for {ticker} (yfinance)")
+        return float(price)
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch),
+            timeout=_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("get_current_price: timeout for %s", ticker)
+        raise ValueError(f"get_current_price timed out for {ticker}")
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.warning("get_current_price: failed for %s: %s", ticker, e)
+        raise ValueError(f"get_current_price failed for {ticker}: {e}") from e
+
+
+async def get_price_history(ticker: str, period: str = "10y") -> dict:
+    """Return OHLCV price history for the requested period.
+
+    Each record: {date, open, high, low, close, volume}.
+    Records are sorted oldest-first.
+    Returns {"history": []} on any failure (non-critical caller).
+    """
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker, session=_SESSION)
+        df = t.history(period=period)
+        if df is None or df.empty:
+            return {"history": []}
+        records = []
+        for idx, row in df.iterrows():
+            records.append({
+                "date": str(idx.date()),
+                "open": float(row.get("Open") or 0),
+                "high": float(row.get("High") or 0),
+                "low": float(row.get("Low") or 0),
+                "close": float(row.get("Close") or 0),
+                "volume": int(row.get("Volume") or 0),
+            })
+        return {"history": records}
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch),
+            timeout=_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("get_price_history: timeout for %s period=%s", ticker, period)
+        return {"history": []}
+    except Exception as e:
+        logger.warning("get_price_history: failed for %s period=%s: %s", ticker, period, e)
+        return {"history": []}
+
+
+async def get_financials(ticker: str) -> dict:
+    """Return annual income statement, balance sheet, and cash flow statements.
+
+    Each is a list[dict] converted from the yfinance DataFrame via _df_to_records.
+    Returns empty lists for each key on any failure (non-critical caller).
+    """
+    def _fetch() -> dict:
+        t = yf.Ticker(ticker, session=_SESSION)
+        return {
+            "income_stmt": _df_to_records(t.financials),
+            "balance_sheet": _df_to_records(t.balance_sheet),
+            "cashflow": _df_to_records(t.cashflow),
+        }
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch),
+            timeout=_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("get_financials: timeout for %s", ticker)
+        return {"income_stmt": [], "balance_sheet": [], "cashflow": []}
+    except Exception as e:
+        logger.warning("get_financials: failed for %s: %s", ticker, e)
+        return {"income_stmt": [], "balance_sheet": [], "cashflow": []}
 
 
 async def get_analyst_data(ticker: str) -> dict:
