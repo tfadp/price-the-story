@@ -147,7 +147,11 @@ async def _classify(state: GraphState) -> GraphState:
     # Step 4 (cont): Segment classification
     dollar_volume = avg_vol * current_price
 
-    if market_cap > 50e9 and dollar_volume > 500e6:
+    # Safety net: mega-caps are always liquid regardless of measured volume.
+    # Protects against misclassification when price history is unavailable.
+    if market_cap > 200e9:
+        segment = "large_cap_blue_chip"
+    elif market_cap > 50e9 and dollar_volume > 500e6:
         segment = "large_cap_blue_chip"
     elif 2e9 <= market_cap <= 50e9:
         segment = "mid_cap"

@@ -57,7 +57,9 @@ async def run(state: GraphState) -> dict:
                 if result:
                     return {"analyst_estimates": result}
             except Exception as e:
+                import traceback
                 logger.warning("analyst_estimates: Perplexity failed for %s: %s", ticker, e)
+                logger.debug("analyst_estimates: Perplexity traceback:\n%s", traceback.format_exc())
 
         # ------------------------------------------------------------------
         # Path B: yfinance fallback
@@ -91,7 +93,7 @@ async def _fetch_from_perplexity(ticker: str, api_key: str) -> Optional[dict]:
         f'  "buy_count": <integer, number of Buy / Strong Buy / Outperform ratings>,\n'
         f'  "hold_count": <integer, number of Hold / Neutral / Market Perform ratings>,\n'
         f'  "sell_count": <integer, number of Sell / Underperform / Underweight ratings>,\n'
-        f'  "avg_price_target": <float, mean analyst price target in USD>,\n'
+        f'  "avg_target_price": <float, mean analyst price target in USD>,\n'
         f'  "median_price_target": <float, median analyst price target in USD>,\n'
         f'  "top_analysts": [\n'
         f'    {{"firm": "<firm name>", "rating": "<rating>", "price_target": <float>}}\n'
@@ -133,7 +135,7 @@ async def _fetch_from_perplexity(ticker: str, api_key: str) -> Optional[dict]:
     sell_count = int(data.get("sell_count") or 0)
     total = buy_count + hold_count + sell_count
 
-    avg_target = safe_float(data.get("avg_price_target"))
+    avg_target = safe_float(data.get("avg_target_price"))
     median_target = safe_float(data.get("median_price_target"))
     narrative = str(data.get("narrative") or "").strip()
     top_analysts = data.get("top_analysts") or []
@@ -170,7 +172,7 @@ async def _fetch_from_perplexity(ticker: str, api_key: str) -> Optional[dict]:
         "revision_trend": None,
         "surprise_history": [],
         "rating_summary": rating_summary,
-        "avg_price_target": avg_target,
+        "avg_target_price": avg_target,
         "weighted_target_price": median_target,
         "analyst_sentiment_notes": narrative,
         "tracked_analysts": tracked_analysts,
