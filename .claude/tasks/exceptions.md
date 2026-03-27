@@ -15,8 +15,14 @@
 
 - 2026-03-25 | backend/app/main.py | `from __future__ import annotations` caused FastAPI to treat `body: AnalyzeRequest` as a query parameter instead of a request body, because the annotation became a forward-ref string and FastAPI 0.115.5 could not resolve it to a Pydantic model type for body detection. Caught when happy-path tests returned 422 with `loc: ['query', 'body']`. Resolution: removed `from __future__ import annotations` from main.py — the project targets Python 3.11+ so `float | None` union syntax works natively without the future import.
 
-- 2026-03-25 | backend/app/nodes/valuation.py | Performance bottleneck: get_price_history("1y") for sentiment-premium check is called sequentially AFTER the DCF is complete, adding a serial 15-second network call to what could otherwise be an already-parallel node. No fix implemented — presented to user (Phase 3 of QA pass). Status: presented to user.
+- 2026-03-25 | backend/app/nodes/valuation.py | Performance bottleneck: get_price_history("1y") re-fetch in sentiment check. Status: FIXED 2026-03-27 — classifier stores 10yr history in state["price_history"]; valuation reads from state instead of network.
 
-- 2026-03-25 | backend/app/nodes/fundamentals.py | Performance bottleneck: LLM instantiation (ChatAnthropic) is done inside the hot path on every request instead of being cached/reused. A new client object is constructed each time. No fix implemented — presented to user (Phase 3 of QA pass). Status: presented to user.
+- 2026-03-25 | backend/app/nodes/fundamentals.py | Performance bottleneck: ChatAnthropic instantiated per request. Status: FIXED 2026-03-27 — module-level lazy singleton _get_llm_haiku() in fundamentals, macro, analyst_estimates.
 
-- 2026-03-25 | backend/app/data/financial_datasets_client.py | Performance bottleneck: each of get_income_statements, get_balance_sheets, and get_cash_flow_statements creates a fresh httpx.AsyncClient. Even when called via asyncio.gather they each pay connection-setup overhead. A shared/reused client would remove this. No fix implemented — presented to user (Phase 3 of QA pass). Status: presented to user.
+- 2026-03-25 | backend/app/data/financial_datasets_client.py | Performance bottleneck: per-call httpx.AsyncClient. Status: FIXED 2026-03-27 — shared module-level _FD_CLIENT with event-loop-identity tracking.
+
+- 2026-03-27 | backend/app/nodes/analyst_estimates.py | Perplexity path returned "avg_price_target" but Pydantic model expected "avg_target_price" — silently dropped. Status: FIXED — key renamed in prompt, parse, and return dict.
+
+- 2026-03-27 | backend/app/nodes/classifier.py | AAPL classified as "other" when yfinance price history is empty (rate-limited) → avg_vol=0 → dollar_volume=0 → fails large_cap threshold. Status: FIXED — market_cap > 200B safety net always classifies as large_cap_blue_chip.
+
+- 2026-03-27 | backend/app/data/alpha_vantage_client.py | Parallel OVERVIEW + GLOBAL_QUOTE calls hit AV's 1 req/sec limit — one call returns empty dict, market_cap=0. Status: FIXED — replaced get_ticker_info() supplement with get_market_cap() (OVERVIEW only, 1 call).
