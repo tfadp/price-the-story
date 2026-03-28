@@ -26,3 +26,11 @@
 - 2026-03-27 | backend/app/nodes/classifier.py | AAPL classified as "other" when yfinance price history is empty (rate-limited) → avg_vol=0 → dollar_volume=0 → fails large_cap threshold. Status: FIXED — market_cap > 200B safety net always classifies as large_cap_blue_chip.
 
 - 2026-03-27 | backend/app/data/alpha_vantage_client.py | Parallel OVERVIEW + GLOBAL_QUOTE calls hit AV's 1 req/sec limit — one call returns empty dict, market_cap=0. Status: FIXED — replaced get_ticker_info() supplement with get_market_cap() (OVERVIEW only, 1 call).
+
+- 2026-03-28 | backend/app/nodes/pm_synthesis.py:185-186 | Two unused variables (`prob_confidence`, `valuation_confidence`) assigned but never read — ruff F841. Caught during /review. | Deleted both lines.
+
+- 2026-03-28 | backend/app/nodes/probability_engine.py:279 | Unused variable `efficiency_verdict` extracted from state but never used in scenario weights or any downstream logic — ruff F841. Caught during /review. | Deleted the assignment.
+
+- 2026-03-28 | backend/app/nodes/news_sentiment.py | Summary text showed raw days_to_expiry (e.g. "420 days") instead of human-readable months. Non-technical users don't think in options days. Caught during /review. | Converted to `round(days / 30)` months.
+
+- 2026-03-28 | backend/app/nodes/fundamentals.py:344 | `reversed(balance_records[-3:])` in yfinance fallback selected the 3 OLDEST years instead of 3 most recent for the leverage check. balance_records is newest-first from yfinance, so [-3:] is the oldest slice. Caught during /review. | Changed to `balance_records[:3]` (most recent 3 years).

@@ -28,6 +28,7 @@ Fix: use history-derived volume from the data already in state rather than new f
 ## L6 — LangGraph parallel nodes must return partial dicts (deltas)
 Returning the full state from a parallel node causes `InvalidUpdateError` on shared keys.
 Every parallel node must return only the keys it owns, e.g. `{"fundamentals": {...}}`.
+Exception: `section_statuses` can also be returned because it has a merge reducer.
 
 ## L7 — git worktrees conflict when main has uncommitted changes
 When a worktree branch is merged into main and main has unstaged edits to the same file,
@@ -37,3 +38,21 @@ the merge aborts. Always stash before merging from a worktree.
 If the Next.js app gets into a broken state (buttons unresponsive, analyze frozen),
 `Cmd+Shift+R` hard refresh resets it. The EventSource from a previous analysis can
 linger and block new interactions if the state machine doesn't reset cleanly.
+
+## L9 — GitHub remote must be set before first push
+This repo had no git remote configured. Running `git push origin main` before `git remote add`
+causes a fatal error. The fix is `git remote add origin <url>` first, or if origin already
+exists with wrong URL: `git remote set-url origin <correct-url>`.
+Creating a GitHub repo with a README causes a divergent history — pull with
+`--allow-unrelated-histories` before pushing.
+
+## L10 — Parallel nodes cannot read state written by other parallel nodes
+`news_sentiment` and `valuation` both run in the parallel fan-out. `news_sentiment`
+cannot read `state["valuation"]` because it hasn't been written yet at that point.
+Always use `ticker_meta` (written by the serial classifier node) for current price in parallel nodes.
+
+## L11 — Binary 3-scenario probability voting is too coarse
+A model that votes bull/base/bear each as 0.0 or 1.0 produces only 4 possible outputs
+(0%, 35%, 80%, 100%) regardless of how good or bad the inputs are.
+Fix: Monte Carlo simulation sampling continuous growth and multiple distributions produces
+a real probability range that meaningfully differentiates stocks.

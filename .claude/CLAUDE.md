@@ -46,6 +46,10 @@ equity-research-spec-v5.docx  — Master product spec (source of truth for featu
 - Parallel nodes MUST return only their own output key as a partial dict (delta).
   NEVER return the full state from a parallel node.
 - Serial nodes (classifier, probability_engine, pm_synthesis) may modify state in-place.
+- Parallel nodes CANNOT read state written by other parallel nodes (they run concurrently).
+  Use `ticker_meta` (written by the serial classifier) for current price inside parallel nodes.
+  Never try to read `state["valuation"]` or `state["fundamentals"]` from within another parallel node.
+- `section_statuses` may also be returned from parallel nodes — it has a merge reducer and won't conflict.
 
 ## Pydantic / API Contract Rules
 - Before naming a return dict key in a node, grep the Pydantic model for the exact field name.
