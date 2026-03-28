@@ -341,7 +341,8 @@ async def run(state: GraphState) -> dict:
             for bs_row in balance_fd[-3:]:
                 recent_equities.append(safe_float(bs_row.get("total_equity")))
         else:
-            for bs_row in reversed(balance_records[-3:]):
+            # balance_records is newest-first; take the first 3 to get the most recent years
+            for bs_row in balance_records[:3]:
                 eq = _find_field(bs_row, "Stockholders Equity", "Total Stockholders Equity", "CommonStockEquity")
                 recent_equities.append(eq)
         valid_equities = [e for e in recent_equities if e is not None and e > 0]

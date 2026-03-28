@@ -148,15 +148,25 @@ Return this JSON structure:
             prob_high = number_registry.get(f"prob_{holding_period}yr_high", 0.0)
             pea = val.get("price_efficiency_assessment") or {}
             efficiency = pea.get("efficiency_verdict", "unknown") if isinstance(pea, dict) else "unknown"
+            prob_enabled = (state.get("probability_engine") or {}).get("enabled", True)
 
-            verdict_text = (
-                f"At today's price of ${number_registry.get('current_price', 'N/A')}, "
-                f"we estimate a {prob_low*100:.0f}%–{prob_high*100:.0f}% probability of reaching a "
-                f"{state['target_cagr']*100:.0f}% annual return over {holding_period} years. "
-                f"The price appears {str(efficiency).replace('_', ' ')} relative to our fair value range "
-                f"of ${number_registry.get('fair_value_low', 'N/A')}–${number_registry.get('fair_value_high', 'N/A')}. "
-                "Data availability is limited; treat this as a preliminary screen, not a full analysis."
-            )
+            if prob_enabled:
+                verdict_text = (
+                    f"At today's price of ${number_registry.get('current_price', 'N/A')}, "
+                    f"our heuristic model estimates a {prob_low*100:.0f}%–{prob_high*100:.0f}% chance of reaching a "
+                    f"{state['target_cagr']*100:.0f}% annual return over {holding_period} years. "
+                    f"The price appears {str(efficiency).replace('_', ' ')} relative to our fair value range "
+                    f"of ${number_registry.get('fair_value_low', 'N/A')}–${number_registry.get('fair_value_high', 'N/A')}. "
+                    "Treat this as a screening output, not calibrated odds."
+                )
+            else:
+                verdict_text = (
+                    f"At today's price of ${number_registry.get('current_price', 'N/A')}, "
+                    "the model does not have enough independent inputs to publish return odds responsibly. "
+                    f"The current valuation signal is {str(efficiency).replace('_', ' ')} relative to our fair value range "
+                    f"of ${number_registry.get('fair_value_low', 'N/A')}–${number_registry.get('fair_value_high', 'N/A')}. "
+                    "Treat this ticker as requiring manual review rather than a model-led decision."
+                )
             result = {
                 "verdict_paragraph": verdict_text,
                 "confidence_verdict": "insufficient_data",
@@ -170,7 +180,8 @@ Return this JSON structure:
         prob_5yr = number_registry.get("prob_5yr_low", 0.0)
         stress_verdict = (state.get("stress_test") or {}).get("stress_verdict") if state.get("stress_test") else None
         data_quality: str = state.get("data_quality", "low") or "low"
-        prob_enabled = (state.get("probability_engine") or {}).get("enabled", True)
+        prob_state = state.get("probability_engine") or {}
+        prob_enabled = prob_state.get("enabled", True)
 
         if data_quality == "low" or not prob_enabled:
             confidence_verdict = "insufficient_data"
