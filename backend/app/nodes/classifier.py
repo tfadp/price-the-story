@@ -12,6 +12,7 @@ from app.state import GraphState
 from app.data.alpha_vantage_client import get_market_cap, get_ticker_info
 from app.data.yfinance_client import get_price_history, get_current_price
 from app.data.financial_datasets_client import get_company_facts, get_snapshot_price
+from app.utils import safe_float
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def _classify(state: GraphState) -> GraphState:
             # Preserve FD-specific fields for downstream nodes
             "_fd_facts": facts,
         }
-    except ValueError as fd_error:
+    except Exception as fd_error:
         # A 404 from FD means the ticker genuinely does not exist — hard fail
         if "not found" in str(fd_error).lower() or "404" in str(fd_error):
             raise
@@ -72,7 +73,7 @@ async def _classify(state: GraphState) -> GraphState:
 
     # Step 1b: Supplement missing market_cap / volume from Alpha Vantage when FD path was used.
     # FD never returns volume and often omits market_cap for large caps.
-    market_cap_raw: float = info.get("marketCap", 0) or 0
+    market_cap_raw: float = safe_float(info.get("marketCap")) or 0.0
 
     if _source == "financial_datasets" and market_cap_raw == 0:
         # Single OVERVIEW call — avoids AV's 1 req/sec limit that fires
@@ -97,12 +98,11 @@ async def _classify(state: GraphState) -> GraphState:
         )
 
     # Step 4: Gather market data for classification
-    market_cap: float = info.get("marketCap", 0) or 0
-    avg_vol: float = (
+    market_cap: float = safe_float(info.get("marketCap")) or 0.0
+    avg_vol: float = safe_float(
         info.get("averageDailyVolume10Day")
         or info.get("regularMarketVolume")
-        or 0
-    )
+    ) or 0.0
 
     # If FD gave us the current price above, we already have it.
     # For the AV fallback path, try a fresh fetch to be consistent.
@@ -147,6 +147,9 @@ async def _classify(state: GraphState) -> GraphState:
     # Step 4 (cont): Segment classification
     dollar_volume = avg_vol * current_price
 
+    has_market_cap = market_cap > 0
+    has_volume = avg_vol > 0
+
     # Safety net: mega-caps are always liquid regardless of measured volume.
     # Protects against misclassification when price history is unavailable.
     if market_cap > 200e9:
@@ -155,15 +158,20 @@ async def _classify(state: GraphState) -> GraphState:
         segment = "large_cap_blue_chip"
     elif 2e9 <= market_cap <= 50e9:
         segment = "mid_cap"
-    elif market_cap < 2e9 or annualized_vol > 0.60:
+    elif has_market_cap and market_cap < 2e9:
+        segment = "small_cap_high_vol"
+    elif has_market_cap and market_cap <= 5e9 and annualized_vol > 0.60:
         segment = "small_cap_high_vol"
     else:
         segment = "other"
 
     # Step 5: Confidence
-    has_market_cap = market_cap > 0
-    has_volume = avg_vol > 0
-    segment_confidence = "high" if (has_market_cap and has_volume) else "medium"
+    if has_market_cap and has_volume:
+        segment_confidence = "high"
+    elif has_market_cap or has_volume:
+        segment_confidence = "medium"
+    else:
+        segment_confidence = "low"
 
     # Step 6: Data quality
     data_quality_map = {
@@ -179,6 +187,13 @@ async def _classify(state: GraphState) -> GraphState:
     state["segment_confidence"] = segment_confidence
     state["data_quality"] = data_quality
     state["is_us_equity"] = True
+    info["_classification_debug"] = {
+        "market_cap": market_cap,
+        "avg_daily_volume": avg_vol,
+        "dollar_volume": dollar_volume,
+        "annualized_volatility": annualized_vol,
+        "source": _source,
+    }
     state["ticker_meta"] = info
     # Stash the 10yr history so downstream nodes (e.g. valuation) can reuse it
     # without making a second network call.

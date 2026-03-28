@@ -25,6 +25,39 @@ export interface ProbabilityHorizon {
   prob_ge_target_high: number;
 }
 
+export interface ProbabilityEntryDependenceRow {
+  entry_price: number;
+  years: number;
+  prob_ge_target_low: number;
+  prob_ge_target_high: number;
+}
+
+export interface ProbabilityDownsideRiskRow {
+  years: number;
+  prob_le_zero_cagr_low: number;
+  prob_le_zero_cagr_high: number;
+}
+
+export interface ProbabilityDistributionPercentile {
+  label: string;
+  value: number;
+  note?: string | null;
+}
+
+export interface ProbabilityDistributionSummary {
+  summary?: string | null;
+  mean_return?: number | null;
+  median_return?: number | null;
+  p10_return?: number | null;
+  p25_return?: number | null;
+  p75_return?: number | null;
+  p90_return?: number | null;
+  probability_ge_target?: number | null;
+  probability_le_zero_cagr?: number | null;
+  percentiles?: ProbabilityDistributionPercentile[];
+  notes?: string | null;
+}
+
 export interface SuggestedEntryPrice {
   price: number;
   prob_ge_target_low: number;
@@ -38,9 +71,17 @@ export interface ProbabilityEngine {
   confidence_tier?: string | null;
   horizons: ProbabilityHorizon[];
   suggested_entry_price?: SuggestedEntryPrice | null;
-  entry_dependence: Array<{ entry_price: number; years: number; prob_ge_target_low: number; prob_ge_target_high: number }>;
-  downside_risk: Array<{ years: number; prob_le_zero_cagr_low: number; prob_le_zero_cagr_high: number }>;
+  entry_dependence: ProbabilityEntryDependenceRow[];
+  downside_risk: ProbabilityDownsideRiskRow[];
   calibration_notes?: string | null;
+  methodology_notes?: string | null;
+  scenario_weights?: { bull: number; base: number; bear: number } | null;
+  base_growth?: number | null;
+  current_price?: number | null;
+  target_cagr?: number | null;
+  distribution_summary?: ProbabilityDistributionSummary | null;
+  percentile_summary?: ProbabilityDistributionSummary | null;
+  return_distribution?: ProbabilityDistributionSummary | null;
 }
 
 export interface PriceEfficiencyAssessment {
@@ -51,6 +92,19 @@ export interface PriceEfficiencyAssessment {
   sentiment_premium_flag: boolean;
   sentiment_premium_notes?: string | null;
   historical_analog?: string | null;
+}
+
+export interface OptionsSentiment {
+  expiry?: string | null;
+  days_to_expiry?: number | null;
+  atm_strike?: number | null;
+  implied_volatility?: number | null;
+  implied_move_pct?: number | null;
+  call_put_oi_ratio?: number | null;
+  lean?: 'bullish' | 'bearish' | 'neutral' | string | null;
+  thesis_alignment?: 'supports_thesis' | 'mixed' | 'contradicts_thesis' | string | null;
+  summary?: string | null;
+  source?: string | null;
 }
 
 export interface EntryBand {
@@ -68,6 +122,8 @@ export interface Valuation {
   valuation_method_summary?: string | null;
   suggested_entry_band?: EntryBand | null;
   price_efficiency_assessment?: PriceEfficiencyAssessment | null;
+  valuation_confidence?: string | null;
+  valuation_notes?: string | null;
 }
 
 export interface StressTest {
@@ -82,6 +138,27 @@ export interface StressTest {
   robust_assumptions: string[];
   stress_verdict?: StressVerdict | null;
   stress_verdict_notes?: string | null;
+}
+
+export interface Sentiment {
+  news_sentiment_score?: number | null;
+  news_lookback_days?: number;
+  options_sentiment?: OptionsSentiment | null;
+}
+
+export interface SectionStatusDetail {
+  status: string;
+  source?: string | null;
+  cached: boolean;
+  ttl_remaining_s?: number | null;
+}
+
+export interface HallucinationCheck {
+  validated_at?: string | null;
+  numbers_checked: number;
+  numbers_matched: number;
+  numbers_flagged: number;
+  overall_status: HallucinationStatus;
 }
 
 export interface RedFlag {
@@ -121,22 +198,9 @@ export interface Analysts {
 export interface MacroAndCrowd {
   macro_regime?: MacroRegime | null;
   macro_regime_confidence?: string | null;
+  macro_narrative?: string | null;
   scenario_impacts: Array<{ scenario: string; impact_on_business: string; impact_direction: string }>;
-}
-
-export interface HallucinationCheck {
-  validated_at?: string | null;
-  numbers_checked: number;
-  numbers_matched: number;
-  numbers_flagged: number;
-  overall_status: HallucinationStatus;
-}
-
-export interface SectionStatusDetail {
-  status: string;
-  source?: string | null;
-  cached: boolean;
-  ttl_remaining_s?: number | null;
+  polymarket_signals?: Array<{ market_name: string; implied_probability: number; direction_for_ticker: string; notes?: string | null }>;
 }
 
 export interface AnalyzeResponse {
@@ -149,6 +213,7 @@ export interface AnalyzeResponse {
   confidence_verdict?: ConfidenceVerdict | null;
   thesis?: Thesis | null;
   valuation?: Valuation | null;
+  sentiment?: Sentiment | null;
   analysts?: Analysts | null;
   macro_and_crowd?: MacroAndCrowd | null;
   probability_engine?: ProbabilityEngine | null;
@@ -157,6 +222,7 @@ export interface AnalyzeResponse {
   section_statuses: Record<string, SectionStatusDetail>;
   hallucination_check: HallucinationCheck;
   disclaimers: string[];
+  debug?: Record<string, unknown> | null;
 }
 
 export interface ProgressEvent {

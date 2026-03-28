@@ -106,6 +106,9 @@ async def run(state: GraphState) -> dict:
         # ------------------------------------------------------------------
         # Prefer analyst consensus; fall back to historical CAGR
         base_growth: float = 0.08  # default fallback
+        base_growth_source = "default"
+        valuation_notes: list[str] = []
+        valuation_confidence = "medium"
 
         consensus_path: list = analyst_estimates.get("consensus_growth_path", []) or []
         if consensus_path:
@@ -120,6 +123,7 @@ async def run(state: GraphState) -> dict:
                         growth_estimates.append(g)
             if growth_estimates:
                 base_growth = sum(growth_estimates) / len(growth_estimates)
+                base_growth_source = "analyst_consensus"
         else:
             # Historical EPS CAGR
             if len(valid_eps) >= 2 and valid_eps[0] > 0:
@@ -128,8 +132,15 @@ async def run(state: GraphState) -> dict:
                     hist_cagr = (valid_eps[-1] / valid_eps[0]) ** (1 / n) - 1
                     if not math.isnan(hist_cagr) and not math.isinf(hist_cagr):
                         base_growth = min(max(hist_cagr, -0.30), 0.50)
+                        base_growth_source = "historical_eps"
                 except (ValueError, ZeroDivisionError):
                     pass
+
+        if base_growth_source == "default":
+            valuation_confidence = "low"
+            valuation_notes.append(
+                "Base growth fell back to the default 8% assumption because analyst and historical EPS inputs were insufficient."
+            )
 
         # ------------------------------------------------------------------
         # Handle negative/zero EPS: P/S multiple fallback
@@ -140,6 +151,9 @@ async def run(state: GraphState) -> dict:
             ticker_meta = state.get("ticker_meta") or {}
             ps_ratio = safe_float(ticker_meta.get("priceToSalesTrailing12Months"))
             shares_outstanding = safe_float(ticker_meta.get("sharesOutstanding"))
+            valuation_notes.append(
+                "Valuation used a sales-based fallback because positive EPS inputs were unavailable."
+            )
 
             if ps_ratio and ps_ratio > 0 and revenue_values:
                 valid_revs = [safe_float(r) for r in revenue_values if safe_float(r) is not None and r > 0]
@@ -157,15 +171,27 @@ async def run(state: GraphState) -> dict:
                         fair_value_base = current_price
                         fair_value_low = current_price * 0.80
                         fair_value_high = current_price * 1.20
+                        valuation_confidence = "low"
+                        valuation_notes.append(
+                            "Shares outstanding were unavailable, so fair value was anchored around the current price."
+                        )
                 else:
                     fair_value_base = current_price
                     fair_value_low = current_price * 0.80
                     fair_value_high = current_price * 1.20
+                    valuation_confidence = "low"
+                    valuation_notes.append(
+                        "Revenue history was unavailable, so fair value was anchored around the current price."
+                    )
             else:
                 # No useful data at all: centre on current price
                 fair_value_base = current_price
                 fair_value_low = current_price * 0.80
                 fair_value_high = current_price * 1.20
+                valuation_confidence = "low"
+                valuation_notes.append(
+                    "P/S inputs were unavailable, so fair value was anchored around the current price rather than estimated independently."
+                )
         else:
             # Full DCF
             fair_value_base = _dcf(current_eps, base_growth, _WACC_BASE, _TERMINAL_PE_BASE)
@@ -181,6 +207,10 @@ async def run(state: GraphState) -> dict:
                 _WACC_BASE - 0.01,
                 _TERMINAL_PE_BASE * 1.10,
             )
+            if base_growth_source == "analyst_consensus" and len(valid_eps) >= 3:
+                valuation_confidence = "medium"
+            elif base_growth_source == "historical_eps":
+                valuation_confidence = "medium"
 
         # ------------------------------------------------------------------
         # Entry band
@@ -191,7 +221,12 @@ async def run(state: GraphState) -> dict:
         # ------------------------------------------------------------------
         # Price efficiency assessment
         # ------------------------------------------------------------------
-        if current_price > fair_value_high:
+        if valuation_confidence == "low":
+            efficiency_verdict = "insufficient_data"
+            efficiency_notes = (
+                "Price efficiency is not being judged confidently because fair value relied on fallback assumptions rather than a fully independent estimate."
+            )
+        elif current_price > fair_value_high:
             efficiency_verdict = "appears_inflated"
             efficiency_notes = (
                 f"At ${current_price:.2f}, the stock trades above our bull-case fair value "
@@ -240,7 +275,7 @@ async def run(state: GraphState) -> dict:
 
         # Valuation method summary (template, NOT LLM)
         valuation_method_summary = (
-            f"Blended DCF + P/E multiple. Base case uses {base_growth*100:.1f}% revenue growth, "
+            f"Heuristic DCF + P/E framework. Base case uses {base_growth*100:.1f}% growth, "
             f"{_WACC_BASE*100:.1f}% discount rate, {_TERMINAL_PE_BASE:.0f}x terminal P/E. "
             f"Bear case: -20% growth, +1pp rate. Bull case: +20% growth, -1pp rate."
         )
@@ -270,8 +305,11 @@ async def run(state: GraphState) -> dict:
                     "sentiment_premium_notes": sentiment_premium_notes,
                     "historical_analog": None,
                 },
+                "valuation_confidence": valuation_confidence,
+                "valuation_notes": " ".join(valuation_notes) if valuation_notes else None,
                 # Internal: read by probability_engine
                 "_base_growth": base_growth,
+                "_base_growth_source": base_growth_source,
             },
         }
 

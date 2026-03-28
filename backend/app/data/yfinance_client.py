@@ -16,6 +16,7 @@ Every call is wrapped in asyncio.wait_for with a 15-second timeout.
 """
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import pandas as pd
@@ -247,3 +248,95 @@ async def get_analyst_data(ticker: str) -> dict:
         "price_targets": price_targets_out,
         "earnings_history": _safe_df(raw.get("earnings_history")),
     }
+
+
+async def get_options_sentiment(ticker: str, current_price: float) -> Optional[dict]:
+    """Return a long-dated options sentiment snapshot for liquid names.
+
+    Chooses the nearest expiry at least 9 months out, then uses the strike
+    nearest to the current price to estimate implied move and call/put lean.
+    Returns None when yfinance has no usable options chain.
+    """
+    def _fetch() -> Optional[dict]:
+        t = yf.Ticker(ticker, session=_SESSION)
+        expiries = list(getattr(t, "options", []) or [])
+        if not expiries:
+            return None
+
+        now = datetime.now(timezone.utc).date()
+        parsed = []
+        for expiry_str in expiries:
+            try:
+                expiry_date = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            days = (expiry_date - now).days
+            if days >= 270:
+                parsed.append((expiry_str, days))
+        if not parsed:
+            return None
+
+        expiry, days_to_expiry = min(parsed, key=lambda item: item[1])
+        chain = t.option_chain(expiry)
+        calls = getattr(chain, "calls", None)
+        puts = getattr(chain, "puts", None)
+        if calls is None or puts is None or calls.empty or puts.empty:
+            return None
+
+        strikes = sorted(set(calls["strike"].tolist()) & set(puts["strike"].tolist()))
+        if not strikes:
+            return None
+        atm_strike = min(strikes, key=lambda strike: abs(float(strike) - current_price))
+
+        call_row = calls.loc[calls["strike"] == atm_strike]
+        put_row = puts.loc[puts["strike"] == atm_strike]
+        if call_row.empty or put_row.empty:
+            return None
+
+        call_oi = float(call_row.iloc[0].get("openInterest") or 0.0)
+        put_oi = float(put_row.iloc[0].get("openInterest") or 0.0)
+        call_iv = call_row.iloc[0].get("impliedVolatility")
+        put_iv = put_row.iloc[0].get("impliedVolatility")
+
+        iv_values = [float(v) for v in (call_iv, put_iv) if v is not None and pd.notna(v)]
+        if not iv_values:
+            return None
+        implied_volatility = sum(iv_values) / len(iv_values)
+        implied_move_pct = implied_volatility * ((days_to_expiry / 365) ** 0.5)
+
+        if call_oi <= 0 and put_oi <= 0:
+            return None
+        if put_oi <= 0:
+            call_put_oi_ratio = 9.99
+        else:
+            call_put_oi_ratio = call_oi / put_oi
+
+        if call_put_oi_ratio > 1.30:
+            lean = "bullish"
+        elif call_put_oi_ratio < 0.77:
+            lean = "bearish"
+        else:
+            lean = "neutral"
+
+        return {
+            "expiry": expiry,
+            "days_to_expiry": int(days_to_expiry),
+            "atm_strike": float(atm_strike),
+            "implied_volatility": float(implied_volatility),
+            "implied_move_pct": float(implied_move_pct),
+            "call_put_oi_ratio": float(call_put_oi_ratio),
+            "lean": lean,
+            "source": "yfinance",
+        }
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_fetch),
+            timeout=_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("get_options_sentiment: timeout for %s", ticker)
+        return None
+    except Exception as e:
+        logger.warning("get_options_sentiment: failed for %s: %s", ticker, e)
+        return None

@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    internal_api_key: str = ""
     anthropic_api_key: str = ""
     financial_datasets_api_key: str = ""
     alpha_vantage_api_key: str = ""
@@ -9,6 +10,8 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     perplexity_api_key: str = ""
     redis_url: str = "redis://localhost:6379"
+    max_concurrent_analyses: int = 2
+    analysis_cache_ttl_s: int = 300
     app_version: str = "0.1.0"
     log_level: str = "INFO"
 

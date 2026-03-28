@@ -245,6 +245,8 @@ class Valuation(BaseModel):
     relative_valuation: Optional[RelativeValuation] = None
     suggested_entry_band: Optional[EntryBand] = None
     price_efficiency_assessment: Optional[PriceEfficiencyAssessment] = None
+    valuation_confidence: Optional[str] = None
+    valuation_notes: Optional[str] = None
 
 
 class ConsensusYear(BaseModel):
@@ -313,6 +315,19 @@ class InstitutionalSummary(BaseModel):
     tier1_activity: Optional[str] = None
 
 
+class OptionsSentiment(BaseModel):
+    expiry: Optional[str] = None
+    days_to_expiry: Optional[int] = None
+    atm_strike: Optional[float] = None
+    implied_volatility: Optional[float] = None
+    implied_move_pct: Optional[float] = None
+    call_put_oi_ratio: Optional[float] = None
+    lean: Optional[str] = None  # bullish | bearish | neutral
+    thesis_alignment: Optional[str] = None  # supports_thesis | mixed | contradicts_thesis
+    summary: Optional[str] = None
+    source: str = "yfinance"
+
+
 class Sentiment(BaseModel):
     news_sentiment_score: Optional[float] = None
     news_lookback_days: int = 30
@@ -321,6 +336,7 @@ class Sentiment(BaseModel):
     filings_risk_evolution: Optional[FilingsRiskEvolution] = None
     insider_summary: Optional[InsiderSummary] = None
     institutional_summary: Optional[InstitutionalSummary] = None
+    options_sentiment: Optional[OptionsSentiment] = None
 
 
 class ScenarioImpact(BaseModel):
@@ -347,6 +363,13 @@ class ProbabilityHorizon(BaseModel):
     years: int
     prob_ge_target_low: float
     prob_ge_target_high: float
+    expected_cagr: Optional[float] = None
+    cagr_p10: Optional[float] = None
+    cagr_p50: Optional[float] = None
+    cagr_p90: Optional[float] = None
+    terminal_price_p10: Optional[float] = None
+    terminal_price_p50: Optional[float] = None
+    terminal_price_p90: Optional[float] = None
 
 
 class SuggestedEntryPrice(BaseModel):
@@ -378,6 +401,12 @@ class ProbabilityEngine(BaseModel):
     entry_dependence: list[EntryDependenceRow] = []
     downside_risk: list[DownsideRiskRow] = []
     calibration_notes: Optional[str] = None
+    methodology_notes: Optional[str] = None
+    scenario_weights: Optional[dict[str, float]] = None
+    base_growth: Optional[float] = None
+    current_price: Optional[float] = None
+    target_cagr: Optional[float] = None
+    simulation_count: Optional[int] = None
 
 
 class RedFlag(BaseModel):

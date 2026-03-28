@@ -24,11 +24,22 @@ function fmtUsd(n: number | null | undefined): string {
   return `$${fmt(n, 2)}`;
 }
 
+function formatSectionName(name: string): string {
+  return name.replace(/_/g, ' ');
+}
+
 export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) {
   const prob = data.probability_engine;
   const val = data.valuation;
   const stress = data.stress_test;
   const efficiency = val?.price_efficiency_assessment;
+  const sectionStatuses = Object.entries(data.section_statuses ?? {});
+  const failedSections = sectionStatuses.filter(([, status]) => status.status === 'failed').map(([name]) => name);
+  const partialSections = sectionStatuses.filter(([, status]) => status.status === 'partial').map(([name]) => name);
+  const warningStatus = data.hallucination_check?.overall_status;
+  const trustMode = prob?.enabled === false || data.confidence_verdict === 'insufficient_data'
+    ? 'insufficient'
+    : 'heuristic';
 
   // Find probability for user's holding period
   const horizonProb = prob?.horizons?.find(h => h.years === holdingPeriod)
@@ -52,6 +63,40 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
         <ConfidenceBadge verdict={data.confidence_verdict} />
       </div>
 
+      {/* Trust / data health */}
+      <div className="bg-gray-800/80 border border-gray-700 rounded-xl p-4 mb-6">
+        <div className="flex flex-wrap items-center gap-2 mb-2">
+          <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${
+            trustMode === 'insufficient'
+              ? 'bg-yellow-950 text-yellow-300 border-yellow-800'
+              : 'bg-gray-950 text-gray-300 border-gray-700'
+          }`}>
+            {trustMode === 'insufficient' ? 'Insufficient data mode' : 'Heuristic model'}
+          </span>
+          {warningStatus && warningStatus !== 'clean' && (
+            <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${
+              warningStatus === 'blocked'
+                ? 'bg-red-950 text-red-300 border-red-800'
+                : 'bg-yellow-950 text-yellow-300 border-yellow-800'
+            }`}>
+              Hallucination check: {warningStatus}
+            </span>
+          )}
+        </div>
+        <p className="text-sm text-gray-300 leading-relaxed">
+          {prob?.enabled === false
+            ? `Probability engine disabled: ${prob.reason_disabled ?? 'no reason provided'}.`
+            : data.confidence_verdict === 'insufficient_data'
+              ? 'The model is deliberately withholding precision because the inputs are incomplete or low quality.'
+              : 'This is a heuristic estimate, not a calibrated forecast. Use it as a directional screen and inspect the assumptions below.'}
+        </p>
+        <div className="flex flex-wrap gap-3 mt-3 text-xs text-gray-400">
+          <span>Sections: {sectionStatuses.length}</span>
+          {failedSections.length > 0 && <span>Failed: {failedSections.map(formatSectionName).join(', ')}</span>}
+          {partialSections.length > 0 && <span>Partial: {partialSections.map(formatSectionName).join(', ')}</span>}
+        </div>
+      </div>
+
       {/* Probability statement */}
       {prob?.enabled !== false && horizonProb && (
         <div className="bg-gray-800 rounded-xl p-4 mb-6">
@@ -62,6 +107,9 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
             {fmtPct(horizonProb.prob_ge_target_low)} – {fmtPct(horizonProb.prob_ge_target_high)}
           </p>
           <p className="text-xs text-gray-500 mt-1">at today&apos;s price of {fmtUsd(val?.current_price)}</p>
+          <p className="text-xs text-gray-500 mt-2">
+            Scenario vote, not a calibrated frequency. Small input changes can move the range.
+          </p>
         </div>
       )}
 
@@ -69,6 +117,9 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
         <div className="bg-gray-800 rounded-xl p-4 mb-6">
           <p className="text-yellow-400 text-sm">
             Probability engine disabled: {prob.reason_disabled}
+          </p>
+          <p className="text-xs text-gray-500 mt-2">
+            No numeric probability is shown because the model decided the inputs are too weak or noisy for this ticker.
           </p>
         </div>
       )}
@@ -176,6 +227,15 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
       {/* Calibration note — small, always present */}
       {prob?.calibration_notes && (
         <p className="text-xs text-gray-600 mb-4">{prob.calibration_notes}</p>
+      )}
+
+      {data.debug && (
+        <div className="bg-gray-800 rounded-xl p-4 mb-4">
+          <p className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Debug metadata</p>
+          <pre className="text-[11px] leading-relaxed text-gray-400 whitespace-pre-wrap break-words">
+            {JSON.stringify(data.debug, null, 2)}
+          </pre>
+        </div>
       )}
 
       {/* Disclaimers */}
