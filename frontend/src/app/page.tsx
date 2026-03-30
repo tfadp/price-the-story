@@ -4,13 +4,17 @@ import InputForm from '@/components/InputForm';
 import ProgressRail from '@/components/ProgressRail';
 import VerdictCard from '@/components/VerdictCard';
 import DetailPanels from '@/components/DetailPanels';
+import PredictionsTab from '@/components/PredictionsTab';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import type { AnalyzeRequest } from '@/types/api';
+
+type Tab = 'analysis' | 'predictions';
 
 export default function Home() {
   const { state, run, reset, lastHeartbeat } = useAnalysis();
   const [lastRequest, setLastRequest] = useState<AnalyzeRequest | null>(null);
   const [startTime, setStartTime] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>('analysis');
 
   function handleSubmit(req: AnalyzeRequest) {
     setLastRequest(req);
@@ -32,21 +36,46 @@ export default function Home() {
             <h1 className="text-lg font-bold text-white">Price the Story</h1>
             <p className="text-xs text-gray-500">Long-horizon equity research</p>
           </div>
-          {state.status !== 'idle' && (
-            <button
-              onClick={handleReset}
-              className="text-sm text-gray-400 hover:text-white transition-colors"
-            >
-              ← New analysis
-            </button>
-          )}
+          <div className="flex items-center gap-4">
+            {/* Tab switcher */}
+            <nav className="flex gap-1 bg-gray-900 rounded-lg p-1">
+              <button
+                onClick={() => setActiveTab('analysis')}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                  activeTab === 'analysis'
+                    ? 'bg-gray-700 text-white font-medium'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Analysis
+              </button>
+              <button
+                onClick={() => setActiveTab('predictions')}
+                className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                  activeTab === 'predictions'
+                    ? 'bg-gray-700 text-white font-medium'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                My Predictions
+              </button>
+            </nav>
+            {activeTab === 'analysis' && state.status !== 'idle' && (
+              <button
+                onClick={handleReset}
+                className="text-sm text-gray-400 hover:text-white transition-colors"
+              >
+                ← New analysis
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <div className="max-w-3xl mx-auto px-6 py-12 flex flex-col items-center gap-10">
 
         {/* Idle state — show the pitch + input form */}
-        {state.status === 'idle' && (
+        {state.status === 'idle' && activeTab === 'analysis' && (
           <div className="flex flex-col items-center gap-8 w-full">
             <div className="text-center">
               <h2 className="text-2xl font-bold text-white mb-3">
@@ -62,7 +91,7 @@ export default function Home() {
         )}
 
         {/* Loading state — progress rail */}
-        {state.status === 'loading' && (
+        {state.status === 'loading' && activeTab === 'analysis' && (
           <div className="flex flex-col items-center gap-8 w-full">
             <div className="text-center">
               <h2 className="text-xl font-semibold text-white mb-1">
@@ -82,7 +111,7 @@ export default function Home() {
         )}
 
         {/* Error state */}
-        {state.status === 'error' && (
+        {state.status === 'error' && activeTab === 'analysis' && (
           <div className="flex flex-col items-center gap-6 w-full">
             <div className="bg-red-950 border border-red-800 rounded-xl p-6 max-w-md w-full text-center">
               <p className="text-red-300 font-medium mb-2">Analysis didn&apos;t complete</p>
@@ -103,7 +132,7 @@ export default function Home() {
         )}
 
         {/* Success state — verdict card + detail panels */}
-        {state.status === 'success' && (
+        {state.status === 'success' && activeTab === 'analysis' && (
           <div className="flex flex-col items-center gap-4 w-full">
             <VerdictCard
               data={state.data}
@@ -111,6 +140,13 @@ export default function Home() {
               holdingPeriod={lastRequest?.horizons?.includes(5) ? 5 : lastRequest?.horizons?.[1] ?? 5}
             />
             <DetailPanels data={state.data} />
+          </div>
+        )}
+
+        {/* Predictions tab */}
+        {activeTab === 'predictions' && (
+          <div className="w-full">
+            <PredictionsTab />
           </div>
         )}
 

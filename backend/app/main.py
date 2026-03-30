@@ -9,8 +9,11 @@ import hashlib
 import json
 import logging
 import time
+import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -34,7 +37,19 @@ from app.models import (
     ProbabilityEngine,
     StressTest,
     RedFlag,
+    PredictionRecord,
+    LeaderboardRow,
+    ScoreRequest,
 )
+from app.db.predictions import (
+    init_db as _init_db,
+    log_prediction,
+    get_all_predictions,
+    get_prediction,
+    score_prediction,
+    get_due_predictions,
+)
+from app.data.yfinance_client import get_current_price
 from app.config import settings
 from app.graph import graph
 
@@ -62,6 +77,7 @@ analysis_cache_lock = asyncio.Lock()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Price the Story API v0.1.0 starting")
+    await asyncio.to_thread(_init_db)
     yield
 
 
@@ -155,6 +171,185 @@ async def analyze_ticker_stream(
     return EventSourceResponse(event_generator())
 
 
+# ---------------------------------------------------------------------------
+# Prediction Ledger endpoints (Phase A)
+# ---------------------------------------------------------------------------
+
+def _compute_leaderboard_status(
+    row: dict,
+    current_price: Optional[float],
+) -> dict:
+    """Enrich a raw DB row with live market data and status classification."""
+    entry_price = row.get("entry_price") or 0.0
+    target_cagr = row.get("target_cagr") or 0.10
+
+    # Already scored — outcome is final
+    outcome = row.get("outcome_1yr")
+    if isinstance(outcome, dict) and outcome.get("outcome"):
+        return {
+            "current_price": current_price,
+            "ytd_growth": None,
+            "required_by_year_end": None,
+            "status": outcome["outcome"],  # hit | miss
+            "days_remaining": 0,
+        }
+
+    if not current_price or entry_price <= 0:
+        return {"current_price": current_price, "ytd_growth": None,
+                "required_by_year_end": None, "status": None, "days_remaining": None}
+
+    ytd_growth = (current_price - entry_price) / entry_price
+
+    run_at = datetime.fromisoformat(row["run_at"])
+    now = datetime.now(timezone.utc)
+    days_elapsed = max((now - run_at).days, 0)
+    horizon_1yr = date.fromisoformat(row["horizon_1yr_date"])
+    days_remaining = max((horizon_1yr - date.today()).days, 0)
+
+    # Time-weighted required pace: what % should you have by today
+    time_frac = days_elapsed / 365.25
+    time_weighted_required = (1 + target_cagr) ** time_frac - 1
+
+    # Remaining return needed to finish the year at target pace
+    required_by_year_end = ((1 + target_cagr) / (1 + ytd_growth)) - 1 if ytd_growth > -1 else None
+
+    if time_weighted_required <= 0:
+        status = "on_track"
+    else:
+        ratio = ytd_growth / time_weighted_required
+        if ratio >= 0.80:
+            status = "on_track"
+        elif ratio >= 0.50:
+            status = "at_risk"
+        else:
+            status = "off_track"
+
+    return {
+        "current_price": current_price,
+        "ytd_growth": round(ytd_growth, 4),
+        "required_by_year_end": round(required_by_year_end, 4) if required_by_year_end is not None else None,
+        "status": status,
+        "days_remaining": days_remaining,
+    }
+
+
+@app.get("/predictions/leaderboard", response_model=list[LeaderboardRow])
+async def predictions_leaderboard() -> list[LeaderboardRow]:
+    """All predictions enriched with live price, YTD growth, and status."""
+    rows = await asyncio.to_thread(get_all_predictions)
+    if not rows:
+        return []
+
+    # Fetch live prices for unique tickers concurrently
+    tickers = list({r["ticker"] for r in rows})
+    prices_list = await asyncio.gather(
+        *[get_current_price(t) for t in tickers], return_exceptions=True
+    )
+    price_map: dict[str, Optional[float]] = {}
+    for ticker, result in zip(tickers, prices_list):
+        price_map[ticker] = result if isinstance(result, float) else None
+
+    leaderboard = []
+    for row in rows:
+        live = _compute_leaderboard_status(row, price_map.get(row["ticker"]))
+        leaderboard.append(LeaderboardRow(**{**row, **live}))
+    return leaderboard
+
+
+@app.get("/predictions/due", response_model=list[PredictionRecord])
+async def predictions_due() -> list[PredictionRecord]:
+    """Predictions with 1yr horizon within 14 days that haven't been scored yet."""
+    rows = await asyncio.to_thread(get_due_predictions)
+    return [PredictionRecord(**r) for r in rows]
+
+
+@app.get("/predictions", response_model=list[PredictionRecord])
+async def predictions_list(
+    ticker: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None),
+    date_to: Optional[str] = Query(default=None),
+) -> list[PredictionRecord]:
+    """All raw prediction records. Filterable by ticker and date range."""
+    rows = await asyncio.to_thread(get_all_predictions, ticker, date_from, date_to)
+    return [PredictionRecord(**r) for r in rows]
+
+
+@app.get("/predictions/{prediction_id}", response_model=PredictionRecord)
+async def predictions_get(prediction_id: str) -> PredictionRecord:
+    """Single prediction record by ID."""
+    row = await asyncio.to_thread(get_prediction, prediction_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    return PredictionRecord(**row)
+
+
+@app.post("/predictions/{prediction_id}/score", response_model=PredictionRecord)
+async def predictions_score(prediction_id: str, body: ScoreRequest) -> PredictionRecord:
+    """Submit a grading outcome for a prediction."""
+    updated = await asyncio.to_thread(
+        score_prediction,
+        prediction_id,
+        body.realized_price,
+        body.thesis_played_out,
+        body.notes,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    return PredictionRecord(**updated)
+
+
+def _build_prediction_dict(state: dict, request: AnalyzeRequest) -> dict:
+    """Extract all fields needed for the prediction ledger from final pipeline state."""
+    prob = state.get("probability_engine") or {}
+    val = state.get("valuation") or {}
+
+    # Find probability band at the user's holding period horizon
+    horizons = request.horizons or [1, 3, 5, 10]
+    holding_period = 5 if 5 in horizons else horizons[-1]
+    prob_low = None
+    prob_high = None
+    for h in (prob.get("horizons") or []):
+        if isinstance(h, dict) and h.get("years") == holding_period:
+            prob_low = h.get("prob_ge_target_low")
+            prob_high = h.get("prob_ge_target_high")
+            break
+
+    # Which nodes had real data (not stubs or failures)
+    nodes_with_data = [
+        k for k, v in state.get("section_statuses", {}).items()
+        if isinstance(v, dict) and v.get("status") == "ok"
+    ]
+
+    pea = val.get("price_efficiency_assessment") or {}
+    efficiency_verdict = pea.get("efficiency_verdict") if isinstance(pea, dict) else None
+
+    run_at = datetime.now(timezone.utc)
+    horizon_1yr_date = (run_at.date() + timedelta(days=365)).isoformat()
+
+    return {
+        "prediction_id": str(uuid.uuid4()),
+        "ticker": state["ticker"],
+        "run_at": run_at.isoformat(),
+        "entry_price": val.get("current_price") or 0.0,
+        "target_cagr": request.target_cagr,
+        "holding_period_years": holding_period,
+        "horizon_1yr_date": horizon_1yr_date,
+        "prob_low": prob_low,
+        "prob_high": prob_high,
+        "confidence_verdict": state.get("confidence_verdict"),
+        "verdict_paragraph": state.get("verdict_paragraph"),
+        "fair_value_base": val.get("fair_value_base"),
+        "macro_regime": (state.get("macro") or {}).get("macro_regime"),
+        "segment": state.get("segment"),
+        "nodes_with_data": json.dumps(nodes_with_data),
+        "outcome_1yr": None,
+        "outcome_notes": None,
+        "stated_bet": None,
+        "words_vs_numbers": None,
+        "efficiency_verdict": efficiency_verdict,
+    }
+
+
 def _build_initial_state(request: AnalyzeRequest) -> dict:
     return {
         "ticker": request.ticker.upper().strip(),
@@ -243,6 +438,13 @@ async def _run_analysis(
                 logger.exception("Pipeline failed for %s", request.ticker)
                 raise HTTPException(status_code=500, detail="Analysis failed. Please try again.")
             response = _state_to_response(result, request)
+
+        # Fire-and-forget — write prediction to SQLite without blocking the response
+        try:
+            pred = _build_prediction_dict(result, request)
+            asyncio.create_task(asyncio.to_thread(log_prediction, pred))
+        except Exception:
+            logger.exception("Failed to build prediction dict for %s", request.ticker)
 
         if use_cache:
             await _store_cached_analysis(request, response)

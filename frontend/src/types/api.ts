@@ -237,3 +237,54 @@ export type AnalysisState =
   | { status: 'loading'; stage: string; progress_pct: number }
   | { status: 'success'; data: AnalyzeResponse }
   | { status: 'error'; message: string };
+
+// ---------------------------------------------------------------------------
+// Prediction Ledger (Phase A)
+// ---------------------------------------------------------------------------
+
+export type PredictionStatus = 'on_track' | 'at_risk' | 'off_track' | 'hit' | 'miss';
+
+export interface PredictionOutcome {
+  grade_date: string;
+  realized_price: number;
+  realized_cagr?: number | null;
+  thesis_played_out?: string | null;
+  outcome: 'hit' | 'miss';
+}
+
+export interface PredictionRecord {
+  prediction_id: string;
+  ticker: string;
+  run_at: string;
+  entry_price: number;
+  target_cagr: number;
+  holding_period_years: number;
+  horizon_1yr_date: string;
+  prob_low?: number | null;
+  prob_high?: number | null;
+  confidence_verdict?: string | null;
+  verdict_paragraph?: string | null;
+  fair_value_base?: number | null;
+  macro_regime?: string | null;
+  segment?: string | null;
+  nodes_with_data?: string[];
+  outcome_1yr?: PredictionOutcome | null;
+  outcome_notes?: string | null;
+  stated_bet?: string | null;
+  words_vs_numbers?: string | null;
+  efficiency_verdict?: string | null;
+}
+
+export interface LeaderboardRow extends PredictionRecord {
+  current_price?: number | null;
+  ytd_growth?: number | null;
+  required_by_year_end?: number | null;
+  status?: PredictionStatus | null;
+  days_remaining?: number | null;
+}
+
+export interface ScoreRequest {
+  realized_price: number;
+  thesis_played_out?: string | null;
+  notes?: string | null;
+}

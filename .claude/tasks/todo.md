@@ -2,38 +2,35 @@
 
 ## Session State
 - branch: main
-- last_test: 22/22 passed (2026-03-28)
+- last_test: 22/22 passed (2026-03-28) — EPS fix not yet regression-tested
 - blocked: none
 - pending_decisions:
-  - Run live AAPL test — confirm `large_cap_blue_chip` + options sentiment panel shows
-  - Analyst "limited or unavailable" may still appear if Perplexity throws silently — check backend logs
-  - Review `equity-research-addendum.docx` (untracked in repo root — may contain Phase 2+ spec updates)
+  - Run live V/AAPL test to confirm EPS fix + probability engine now enabled
+  - Addendum reviewed 2026-03-29 — new phase order (A–H) supersedes old 0–8 numbering
 
-## Build Phases (from spec)
-- [x] Phase 0 — Claude OS sidecar, skeleton, contracts
-- [x] Phase 1 — Backend: nodes 1-4, 10-11, FastAPI
-- [x] Phase 1 — Frontend: Next.js, VerdictCard, InputForm, ProgressRail
-- [x] Phase 1 hardening — rate limiting, input validation, error handling, SSE progress
-- [x] Phase 1 data layer — Financial Datasets (primary), Alpha Vantage (market cap supplement), yfinance (price history + analyst), Perplexity (analyst estimates primary)
-- [x] Phase 1 perf — eliminated redundant network calls, LLM singletons, httpx pooling, safe_float dedup
-- [x] Phase 1+ — Monte Carlo probability engine, options sentiment signal, valuation hardening, PM synthesis hallucination check
-- [ ] Phase 2 — RAG & Growth Bet: EdgarTools, Finnhub, ChromaDB, nodes 5-7
-- [ ] Phase 3 — Macro, Crowd & Stress Test: nodes 8-9, full stress test
-- [ ] Phase 4 — Probability Engine calibration
-- [ ] Phase 5 — Analyst Tracking & Grading
-- [ ] Phase 6 — Prediction Ledger
-- [ ] Phase 7 — PM Synthesis hardening & full frontend polish
-- [ ] Phase 8 — Calibration Feedback & Hardening
+## Build Phases (addendum A–H order, from equity-research-addendum.md)
+- [x] Baseline — classifier, fundamentals, valuation, analyst, macro, probability engine, PM synthesis, frontend, API hardening
+- [x] Baseline+ — Monte Carlo probability engine, valuation hardening, PM synthesis hallucination check
+- [ ] Phase A — Prediction Ledger: SQLite, auto-log after PM synthesis, 5 API endpoints, leaderboard UI tab
+- [ ] Phase B — Growth Bet Extraction: EdgarTools, Finnhub transcripts, ChromaDB, assumption sheet, words-vs-numbers check
+- [ ] Phase C — Filings RAG Full: risk evolution queries, insider (Form 4), institutional (13F)
+- [ ] Phase D — News Sentiment: Finnhub /company-news, VADER scoring, Haiku narrative clusters
+- [ ] Phase E — Price Efficiency: sentiment premium flag, optional historical analog
+- [ ] Phase F — Analyst Tracking & Grading: FMP + Finnhub ingestion, auto-grading, leaderboard tab
+- [ ] Phase G — Polymarket: public API, mapping file, populate stub
+- [ ] Phase H — Redis cache + Brier score calibration feedback
 
 ## Active Tasks (immediate)
-1. Run live AAPL + V test — confirm large_cap_blue_chip, options sentiment panel, analyst data
-2. Review `equity-research-addendum.docx` — check for Phase 2 spec updates before starting Phase 2
-3. Begin Phase 2: RAG & Growth Bet (EdgarTools, Finnhub, ChromaDB, nodes 5-7)
+1. Live test V — confirm EPS fix lands, probability engine enabled, Monte Carlo P10/P50/P90 shows
+2. Begin Phase A: Prediction Ledger (SQLite auto-log + leaderboard tab)
 
 ## Backlog
-- Redis caching (Phase 2)
-- ChromaDB + EdgarTools for filings RAG (Phase 2)
-- Stress test node (Phase 3) — currently shows "unavailable"
-- Probability engine backtesting / calibration (Phase 4)
 - `_safe_float` still exists in `alpha_vantage_client.py` (intentionally kept — different string-handling logic for AV)
 - Pydantic v2 Config deprecation warning — `class Config:` → `model_config = SettingsConfigDict(...)` in config.py (low priority)
+- Stress test node currently shows "unavailable" — Phase B/C territory
+- Open questions from addendum (resolve before relevant phase):
+  - EdgarTools: set_identity email in env (blocks Phase B)
+  - Finnhub API key (blocks Phase B/D)
+  - FMP key verification for /analyst-stock-recommendations (blocks Phase F)
+  - Polymarket mapping file polymarket_markets.json (blocks Phase G)
+  - Redis install (blocks Phase H)

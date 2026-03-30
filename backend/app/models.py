@@ -490,6 +490,48 @@ class AnalyzeResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Prediction Ledger (Phase A)
+# ---------------------------------------------------------------------------
+
+class PredictionRecord(BaseModel):
+    prediction_id: str
+    ticker: str
+    run_at: str
+    entry_price: float
+    target_cagr: float
+    holding_period_years: int
+    horizon_1yr_date: str
+    prob_low: Optional[float] = None
+    prob_high: Optional[float] = None
+    confidence_verdict: Optional[str] = None
+    verdict_paragraph: Optional[str] = None
+    fair_value_base: Optional[float] = None
+    macro_regime: Optional[str] = None
+    segment: Optional[str] = None
+    nodes_with_data: list[str] = []
+    outcome_1yr: Optional[dict] = None
+    outcome_notes: Optional[str] = None
+    stated_bet: Optional[str] = None
+    words_vs_numbers: Optional[str] = None
+    efficiency_verdict: Optional[str] = None
+
+
+class LeaderboardRow(PredictionRecord):
+    """PredictionRecord enriched with live market data for display."""
+    current_price: Optional[float] = None
+    ytd_growth: Optional[float] = None
+    required_by_year_end: Optional[float] = None
+    status: Optional[str] = None   # on_track | at_risk | off_track | hit | miss
+    days_remaining: Optional[int] = None
+
+
+class ScoreRequest(BaseModel):
+    realized_price: float = Field(..., gt=0, description="Actual price at grading time")
+    thesis_played_out: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # SSE progress events
 # ---------------------------------------------------------------------------
 
