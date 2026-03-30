@@ -83,6 +83,13 @@ async def run(state: GraphState) -> GraphState:
                     if fund else "Description unavailable"
                 )
 
+                # Growth bet context from filings_rag (Phase B)
+                filings = state.get("filings_rag") or {}
+                stated_bet = filings.get("stated_bet")
+                most_fragile = filings.get("most_fragile_assumption")
+                words_vs_numbers = filings.get("words_vs_numbers_alignment")
+                alignment_notes = filings.get("alignment_notes")
+
                 prob_low_str = (
                     f"{number_registry[f'prob_{holding_period}yr_low']*100:.0f}%"
                     if f"prob_{holding_period}yr_low" in number_registry
@@ -93,6 +100,15 @@ async def run(state: GraphState) -> GraphState:
                     if f"prob_{holding_period}yr_high" in number_registry
                     else "N/A"
                 )
+
+                # Build optional growth bet section for the prompt
+                growth_bet_section = ""
+                if stated_bet:
+                    growth_bet_section = f"\n- Management's stated bet: {stated_bet}"
+                if most_fragile:
+                    growth_bet_section += f"\n- Most fragile assumption: {most_fragile}"
+                if words_vs_numbers == "significant_misalignment" and alignment_notes:
+                    growth_bet_section += f"\n- Capital allocation warning: {alignment_notes}"
 
                 prompt = f"""You are a trusted senior analyst writing a verdict for a long-horizon investor.
 
@@ -106,7 +122,7 @@ TASK: Write a verdict for this exact situation:
 - Probability at {holding_period}yr: {prob_low_str} – {prob_high_str}
 - Price efficiency: {efficiency_verdict}
 - Stress verdict: {stress_verdict}
-- Macro regime: {macro_regime}
+- Macro regime: {macro_regime}{growth_bet_section}
 
 NUMBER REGISTRY (only use these numbers — never invent others): {json.dumps(number_registry)}
 
@@ -115,7 +131,10 @@ RULES:
 2. 3–5 sentences, verdict-first
 3. No jargon. No "buy"/"sell". Write like a trusted friend with deep expertise.
 4. Be honest about uncertainty. Give a clear bottom line.
-5. Return ONLY valid JSON, no markdown.
+5. If a stated_bet is provided, reference it in the verdict.
+6. If most_fragile_assumption is provided, name it as the key risk.
+7. If capital allocation warning is present, note the contradiction explicitly.
+8. Return ONLY valid JSON, no markdown.
 
 Return this JSON structure:
 {{

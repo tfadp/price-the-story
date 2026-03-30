@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     fmp_api_key: str = ""
     finnhub_api_key: str = ""
     perplexity_api_key: str = ""
+    edgar_identity: str = "dan@juddporter.com"
     redis_url: str = "redis://localhost:6379"
     max_concurrent_analyses: int = 2
     analysis_cache_ttl_s: int = 300
