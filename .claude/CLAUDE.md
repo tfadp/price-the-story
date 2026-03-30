@@ -25,7 +25,7 @@ cd frontend && npx tsc --noEmit
 ```
 
 ## Key Files
-equity-research-spec-v5.docx  — Master product spec (source of truth for features)
+equity-research-spec-v5.md     — Master product spec (source of truth for features)
 .claude/SPECS.md               — Locked naming conventions, schemas, invariants
 
 ## Project Rules

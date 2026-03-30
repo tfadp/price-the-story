@@ -127,9 +127,15 @@ async def run(state: GraphState) -> dict:
             gross_profits: list[Optional[float]] = [safe_float(r.get("gross_profit")) for r in income_fd]
             operating_incomes: list[Optional[float]] = [safe_float(r.get("operating_income")) for r in income_fd]
             net_incomes: list[Optional[float]] = [safe_float(r.get("net_income")) for r in income_fd]
-            # Prefer diluted EPS; eps field also acceptable
+            # FD uses earnings_per_share_diluted; keep legacy fallbacks for other sources
             eps_list: list[Optional[float]] = [
-                safe_float(r.get("eps_diluted") or r.get("eps")) for r in income_fd
+                safe_float(
+                    r.get("earnings_per_share_diluted")
+                    or r.get("earnings_per_share")
+                    or r.get("eps_diluted")
+                    or r.get("eps")
+                )
+                for r in income_fd
             ]
 
             # FD provides free_cash_flow directly — no need to recompute from parts

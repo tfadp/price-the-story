@@ -34,3 +34,5 @@
 - 2026-03-28 | backend/app/nodes/news_sentiment.py | Summary text showed raw days_to_expiry (e.g. "420 days") instead of human-readable months. Non-technical users don't think in options days. Caught during /review. | Converted to `round(days / 30)` months.
 
 - 2026-03-28 | backend/app/nodes/fundamentals.py:344 | `reversed(balance_records[-3:])` in yfinance fallback selected the 3 OLDEST years instead of 3 most recent for the leverage check. balance_records is newest-first from yfinance, so [-3:] is the oldest slice. Caught during /review. | Changed to `balance_records[:3]` (most recent 3 years).
+
+- 2026-03-28 | backend/app/nodes/fundamentals.py:131 | EPS field mismatch with Financial Datasets API: code looked for `eps_diluted` and `eps`, but FD returns `earnings_per_share_diluted` and `earnings_per_share`. Silent mismatch — eps_list was all None for every FD-sourced ticker. Cascaded into: P/S fallback in valuation → low valuation_confidence → probability engine disabled for all tickers. Caught during live V test. | Added `earnings_per_share_diluted` and `earnings_per_share` as primary lookups; kept legacy fallbacks for other sources.
