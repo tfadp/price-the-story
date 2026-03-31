@@ -90,21 +90,6 @@ def mock_external_clients():
         patch("app.nodes.valuation.get_current_price", new_callable=AsyncMock, return_value=_FAKE_SNAPSHOT_PRICE),
         # analyst_estimates.py
         patch("app.nodes.analyst_estimates.get_analyst_data", new_callable=AsyncMock, return_value={}),
-        # news_sentiment.py
-        patch(
-            "app.nodes.news_sentiment.get_options_sentiment",
-            new_callable=AsyncMock,
-            return_value={
-                "expiry": "2027-01-15",
-                "days_to_expiry": 420,
-                "atm_strike": 175.0,
-                "implied_volatility": 0.22,
-                "implied_move_pct": 0.236,
-                "call_put_oi_ratio": 1.8,
-                "lean": "bullish",
-                "source": "yfinance",
-            },
-        ),
         # macro.py
         patch("app.nodes.macro.get_price_history", new_callable=AsyncMock, return_value=_FAKE_PRICE_HISTORY),
         # Source modules are patched too, so direct imports elsewhere stay offline.

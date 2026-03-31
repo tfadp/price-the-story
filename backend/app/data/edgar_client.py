@@ -10,17 +10,23 @@ set_identity() is called once at import time using the configured email.
 import logging
 from typing import Optional
 
-from edgar import set_identity, Company
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Identify ourselves to EDGAR — required courtesy header for rate limiting
-set_identity(settings.edgar_identity)
-
 # Max characters to keep from each section — keeps context window manageable
 _MAX_SECTION_CHARS = 8_000
+
+
+def _get_company_class():
+    """Load edgartools lazily so missing optional deps do not break startup."""
+    try:
+        from edgar import Company, set_identity
+    except ImportError as e:
+        raise RuntimeError("edgartools not installed") from e
+
+    set_identity(settings.edgar_identity)
+    return Company
 
 
 def _truncate(text: Optional[str], max_chars: int = _MAX_SECTION_CHARS) -> Optional[str]:
@@ -41,6 +47,7 @@ def get_annual_filing_text(ticker: str) -> dict:
         }
     """
     try:
+        Company = _get_company_class()
         company = Company(ticker)
         filings = company.get_filings(form="10-K")
         if not filings:
@@ -78,6 +85,7 @@ def get_quarterly_filing_text(ticker: str) -> dict:
         }
     """
     try:
+        Company = _get_company_class()
         company = Company(ticker)
         filings = company.get_filings(form="10-Q")
         if not filings:

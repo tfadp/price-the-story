@@ -61,6 +61,8 @@ export default function DetailPanels({ data }: Props) {
   const failedSections = sectionStatuses.filter(([, status]) => status.status === 'failed');
   const partialSections = sectionStatuses.filter(([, status]) => status.status === 'partial');
   const cachedSections = sectionStatuses.filter(([, status]) => status.cached);
+  const scenarioImpacts = macro_and_crowd?.scenario_impacts ?? [];
+  const polymarketSignals = macro_and_crowd?.polymarket_signals ?? [];
   const distributionSummary =
     probability_engine?.distribution_summary
     ?? probability_engine?.percentile_summary
@@ -286,10 +288,10 @@ export default function DetailPanels({ data }: Props) {
                   )}
                 </p>
               </div>
-              {macro_and_crowd.scenario_impacts?.length > 0 && (
+              {scenarioImpacts.length > 0 && (
                 <div>
                   <p className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Scenario impacts</p>
-                  {macro_and_crowd.scenario_impacts.map((s, i) => (
+                  {scenarioImpacts.map((s, i) => (
                     <div key={i} className="flex items-start gap-2 mb-2">
                       <span className={`text-xs mt-0.5 ${s.impact_direction === 'positive' ? 'text-green-400' : s.impact_direction === 'negative' ? 'text-red-400' : 'text-gray-400'}`}>●</span>
                       <div>
@@ -300,10 +302,10 @@ export default function DetailPanels({ data }: Props) {
                   ))}
                 </div>
               )}
-              {macro_and_crowd.polymarket_signals?.length > 0 && (
+              {polymarketSignals.length > 0 && (
                 <div>
                   <p className="text-xs text-gray-500 mb-2 uppercase tracking-wider">Crowd signals</p>
-                  {macro_and_crowd.polymarket_signals.map((signal, i) => (
+                  {polymarketSignals.map((signal, i) => (
                     <div key={i} className="flex items-start gap-2 mb-2">
                       <span className="text-xs mt-0.5 text-gray-400">●</span>
                       <div>
@@ -498,8 +500,6 @@ export default function DetailPanels({ data }: Props) {
                 </div>
               )}
             </div>
-          ) : probability_engine?.enabled === false ? (
-            <p className="text-yellow-400">{probability_engine.reason_disabled}</p>
           ) : (
             <p className="text-gray-500">Probability data unavailable.</p>
           )}

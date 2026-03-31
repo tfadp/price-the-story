@@ -125,10 +125,9 @@ def score_prediction(
         return None
 
     entry_price = row["entry_price"]
-    run_at = datetime.fromisoformat(row["run_at"])
     now = datetime.now(timezone.utc)
-    years_elapsed = max((now - run_at).days / 365.25, 0.01)
-    realized_cagr = (realized_price / entry_price) ** (1 / years_elapsed) - 1
+    # The ledger stores and surfaces an explicit 1-year grading horizon.
+    realized_cagr = (realized_price / entry_price) - 1
 
     outcome = {
         "grade_date": now.isoformat(),
@@ -164,6 +163,8 @@ def get_due_predictions() -> list[dict]:
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
     """Convert a sqlite3.Row to a plain dict, deserializing JSON text fields."""
+    if row is None:
+        return {}
     d = dict(row)
     for key in ("nodes_with_data", "outcome_1yr"):
         if d.get(key) and isinstance(d[key], str):

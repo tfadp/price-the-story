@@ -366,10 +366,19 @@ def _build_initial_state(request: AnalyzeRequest) -> dict:
 
 
 def _require_api_key(request: Request) -> None:
-    """Require X-API-Key when INTERNAL_API_KEY is configured."""
+    """Require the API key when INTERNAL_API_KEY is configured.
+
+    Accepts the key from either:
+    - x-api-key request header (used by fetch/POST)
+    - x_api_key query parameter (used by EventSource, which cannot send headers)
+    """
     if not settings.internal_api_key:
         return
-    provided = request.headers.get("x-api-key", "")
+    provided = (
+        request.headers.get("x-api-key")
+        or request.query_params.get("x_api_key")
+        or ""
+    )
     if provided != settings.internal_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 

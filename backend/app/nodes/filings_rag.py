@@ -19,10 +19,8 @@ import hashlib
 import json
 import logging
 import textwrap
+from typing import Any
 from typing import Optional
-
-import chromadb
-from chromadb.utils import embedding_functions
 
 from app.config import settings
 from app.data.edgar_client import get_annual_filing_text, get_quarterly_filing_text
@@ -65,12 +63,20 @@ _OK_STATUS = {
 # ChromaDB helpers
 # ---------------------------------------------------------------------------
 
-def _get_collection() -> chromadb.Collection:
-    """Return (or create) the persistent ChromaDB collection."""
+def _get_collection():  # type: ignore[return]
+    """Return (or create) the persistent ChromaDB collection.
+
+    Imports are lazy so that missing the package only fails at call time,
+    not at pytest collection or app startup.
+    """
+    try:
+        import chromadb
+        from chromadb.utils import embedding_functions
+    except ImportError as e:
+        raise RuntimeError("chromadb not installed — run: pip install chromadb sentence-transformers") from e
+
     client = chromadb.PersistentClient(path=_CHROMA_PATH)
-    ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=_EMBED_MODEL
-    )
+    ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=_EMBED_MODEL)
     return client.get_or_create_collection(
         name=_COLLECTION_NAME,
         embedding_function=ef,
@@ -100,7 +106,7 @@ def _period_hash(ticker: str, annual_period: str, quarterly_period: str) -> str:
 
 
 def _embed_documents(
-    collection: chromadb.Collection,
+    collection: Any,
     ticker: str,
     annual: dict,
     quarterly: dict,
@@ -134,7 +140,7 @@ def _embed_documents(
     return total
 
 
-def _rag_query(collection: chromadb.Collection, ticker: str, query: str) -> str:
+def _rag_query(collection: Any, ticker: str, query: str) -> str:
     """Run a single RAG query and return concatenated matching chunks."""
     try:
         results = collection.query(
@@ -297,6 +303,17 @@ async def run(state: GraphState) -> dict:
     fund = state.get("fundamentals") or {}
 
     try:
+        try:
+            collection = await asyncio.to_thread(_get_collection)
+        except RuntimeError as e:
+            logger.warning("filings_rag: dependency unavailable for %s: %s", ticker, e)
+            return {
+                "filings_rag": None,
+                "section_statuses": {
+                    "filings_rag": {**_PARTIAL_STATUS, "source": "optional_dependency_missing"}
+                },
+            }
+
         # ------------------------------------------------------------------
         # Step 1 — Fetch filings and transcripts (all in threads, parallel)
         # ------------------------------------------------------------------
@@ -323,7 +340,6 @@ async def run(state: GraphState) -> dict:
         # ------------------------------------------------------------------
         # Step 2 — Embed into ChromaDB
         # ------------------------------------------------------------------
-        collection = await asyncio.to_thread(_get_collection)
         total_chunks = await asyncio.to_thread(
             _embed_documents, collection, ticker, annual, quarterly, transcripts
         )

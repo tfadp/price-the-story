@@ -9,19 +9,26 @@ All calls are synchronous (finnhub-python is sync) — callers use asyncio.to_th
 import logging
 from typing import Optional
 
-import finnhub
-
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
 # Module-level client — instantiated once, reused across requests
-_client: Optional[finnhub.Client] = None
+_client: Optional[object] = None
 
 
-def _get_client() -> Optional[finnhub.Client]:
+def _get_finnhub_module():
+    try:
+        import finnhub
+    except ImportError as e:
+        raise RuntimeError("finnhub-python not installed") from e
+    return finnhub
+
+
+def _get_client() -> Optional[object]:
     global _client
     if _client is None and settings.finnhub_api_key:
+        finnhub = _get_finnhub_module()
         _client = finnhub.Client(api_key=settings.finnhub_api_key)
     return _client
 
@@ -32,7 +39,11 @@ def get_earnings_transcripts(ticker: str, limit: int = 4) -> list[dict]:
     Each transcript is a dict with keys: symbol, year, quarter, transcript (list of speaker turns).
     Returns an empty list when Finnhub is unavailable or the ticker has no transcripts.
     """
-    client = _get_client()
+    try:
+        client = _get_client()
+    except RuntimeError as e:
+        logger.info("finnhub: %s, skipping transcripts for %s", e, ticker)
+        return []
     if not client:
         logger.info("finnhub: no API key configured, skipping transcripts for %s", ticker)
         return []

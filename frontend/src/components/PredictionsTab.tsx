@@ -80,7 +80,7 @@ function ScoreModal({ row, onClose, onScored }: ScoreModalProps) {
 
   const realized = parseFloat(realizedPrice);
   const realizedCagr = !isNaN(realized) && row.entry_price > 0
-    ? (realized / row.entry_price) ** (1 / Math.max(row.holding_period_years, 0.01)) - 1
+    ? (realized / row.entry_price) - 1
     : null;
 
   async function submit() {
@@ -119,10 +119,10 @@ function ScoreModal({ row, onClose, onScored }: ScoreModalProps) {
 
         <div className="text-sm text-gray-400 space-y-1">
           <p>Entry price: <span className="text-white">{fmtPrice(row.entry_price)}</span></p>
-          <p>Target: <span className="text-white">{fmt(row.target_cagr)} / {row.holding_period_years}yr</span></p>
+          <p>1yr ledger target: <span className="text-white">{fmt(row.target_cagr)}</span></p>
           {realizedCagr != null && (
             <p>
-              Realized CAGR:{' '}
+              Realized 1yr return:{' '}
               <span className={realizedCagr >= row.target_cagr ? 'text-green-400' : 'text-red-400'}>
                 {fmt(realizedCagr)}
               </span>

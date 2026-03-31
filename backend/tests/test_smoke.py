@@ -73,13 +73,13 @@ def test_analyze_default_cagr():
     assert r.status_code == 200
 
 
-def test_large_cap_includes_options_sentiment_signal():
+def test_large_cap_news_sentiment_is_stubbed_partial():
     r = client.post("/analyze-ticker", json={"ticker": "AAPL"})
     assert r.status_code == 200
     data = r.json()
-    assert data["sentiment"]["options_sentiment"]["lean"] == "bullish"
-    assert data["sentiment"]["options_sentiment"]["thesis_alignment"] == "supports_thesis"
-    assert data["sentiment"]["options_sentiment"]["summary"]
+    assert data.get("sentiment") is None
+    assert data["section_statuses"]["news_sentiment"]["status"] == "partial"
+    assert data["section_statuses"]["news_sentiment"]["source"] == "pending_phase2"
 
 
 def test_identical_requests_reuse_cached_analysis_result():
