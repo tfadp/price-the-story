@@ -56,3 +56,29 @@ A model that votes bull/base/bear each as 0.0 or 1.0 produces only 4 possible ou
 (0%, 35%, 80%, 100%) regardless of how good or bad the inputs are.
 Fix: Monte Carlo simulation sampling continuous growth and multiple distributions produces
 a real probability range that meaningfully differentiates stocks.
+
+## L12 — FD income statement uses earnings_per_share_diluted, not eps_diluted
+Financial Datasets API returns `earnings_per_share_diluted` and `earnings_per_share`.
+The original code looked for `eps_diluted` and `eps` — silent None for every ticker.
+This cascaded: no EPS → P/S fallback → low valuation confidence → probability engine disabled.
+Fix: always check actual API response keys before writing field extraction code.
+
+## L13 — EventSource cannot send custom headers; pass auth via query param
+Browser EventSource API has no option to set request headers. If the backend requires
+an API key via x-api-key header, SSE always returns 401.
+Fix: backend accepts key from either header (POST) or x_api_key query param (SSE).
+Frontend passes key as query param for SSE, header for fetch/POST.
+
+## L14 — Prediction ledger uses 1-year grading, not holding-period CAGR
+The ledger grades at 1 year (horizon_1yr_date). Scoring computes `realized/entry - 1`
+(simple 1yr return). The modal preview must use the same formula — not CAGR with
+holding_period_years as the exponent, which produces a different number for 5yr targets.
+Lesson: UI math and backend math must use identical formulas. Verify both ends when writing
+any financial calculation that appears in two places.
+
+## L15 — Hard module imports break pytest collection and app startup
+Importing `chromadb` at module level in filings_rag.py caused `ModuleNotFoundError`
+during pytest collection — before any tests ran or fallbacks could fire.
+Fix: move optional/heavy dependencies into lazy imports inside the function that needs them.
+Pattern: `try: import heavy_lib except ImportError as e: raise RuntimeError("install X") from e`
+Apply this to any Phase B+ dependency that isn't in the base requirements.

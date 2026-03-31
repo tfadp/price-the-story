@@ -56,3 +56,15 @@ equity-research-spec-v5.md     — Master product spec (source of truth for feat
   Mismatches are silently dropped — no error thrown.
 - Never use `from __future__ import annotations` in main.py — FastAPI cannot resolve
   forward-ref strings to Pydantic body types.
+
+## Optional Dependency Rules
+- Never import Phase B+ packages (chromadb, edgartools, finnhub, sentence-transformers)
+  at module level. Always use lazy imports inside the function that needs them.
+  Pattern: `try: import x except ImportError as e: raise RuntimeError("install x") from e`
+  Hard imports at module level break pytest collection and app startup before fallbacks fire.
+
+## SSE / Auth Rules
+- EventSource cannot send custom headers. If INTERNAL_API_KEY is set, pass it as the
+  x_api_key query parameter for SSE endpoints, and as the x-api-key header for POST.
+- analyzeTickerStream must return a cancel function. useAnalysis must call it on reset()
+  and at the start of each new run() to prevent stale SSE callbacks from corrupting state.
