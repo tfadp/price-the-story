@@ -8,6 +8,19 @@ export type PriceEfficiencyVerdict = 'appears_inflated' | 'fairly_priced' | 'app
 export type RedFlagCategory = 'execution' | 'balance_sheet' | 'competitive' | 'regulatory' | 'macro' | 'valuation' | 'governance';
 export type MacroRegime = 'disinflation' | 'sticky_inflation' | 'higher_for_longer_rates' | 'recession' | 'goldilocks' | 'unknown';
 export type HallucinationStatus = 'clean' | 'warnings' | 'blocked';
+export type VerdictLean = 'bull' | 'bear' | 'genuinely_uncertain';
+export type ConvictionModifier = 'strengthens' | 'weakens' | 'unchanged';
+
+export interface ThesisDebate {
+  bull_case?: string | null;
+  bear_case?: string | null;
+  thesis_tension?: string | null;
+  strongest_bull_point?: string | null;
+  strongest_bear_point?: string | null;
+  unresolved_question?: string | null;
+  verdict_lean?: VerdictLean | null;
+  conviction_modifier?: ConvictionModifier | null;
+}
 
 export interface AnalyzeRequest {
   ticker: string;
@@ -218,6 +231,7 @@ export interface AnalyzeResponse {
   macro_and_crowd?: MacroAndCrowd | null;
   probability_engine?: ProbabilityEngine | null;
   stress_test?: StressTest | null;
+  thesis_debate?: ThesisDebate | null;
   red_flags_and_failure_modes: RedFlag[];
   section_statuses: Record<string, SectionStatusDetail>;
   hallucination_check: HallucinationCheck;

@@ -65,6 +65,9 @@ class GraphState(TypedDict, total=False):
     probability_engine: Optional[dict]
     stress_test: Optional[dict]
 
+    # ---- Node 10.5: Thesis Debate Engine ------------------------------------
+    thesis_debate: Optional[dict]
+
     # ---- Node 11: PM Synthesis ------------------------------------------
     pm_synthesis: Optional[dict]
     verdict_paragraph: Optional[str]

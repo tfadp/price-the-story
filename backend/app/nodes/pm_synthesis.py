@@ -90,6 +90,15 @@ async def run(state: GraphState) -> GraphState:
                 words_vs_numbers = filings.get("words_vs_numbers_alignment")
                 alignment_notes = filings.get("alignment_notes")
 
+                # Thesis debate context from Node 10.5
+                debate: dict = state.get("thesis_debate") or {}
+                thesis_tension = debate.get("thesis_tension")
+                strongest_bull = debate.get("strongest_bull_point")
+                strongest_bear = debate.get("strongest_bear_point")
+                unresolved_question = debate.get("unresolved_question")
+                verdict_lean = debate.get("verdict_lean")
+                conviction_modifier = debate.get("conviction_modifier")
+
                 prob_low_str = (
                     f"{number_registry[f'prob_{holding_period}yr_low']*100:.0f}%"
                     if f"prob_{holding_period}yr_low" in number_registry
@@ -110,6 +119,21 @@ async def run(state: GraphState) -> GraphState:
                 if words_vs_numbers == "significant_misalignment" and alignment_notes:
                     growth_bet_section += f"\n- Capital allocation warning: {alignment_notes}"
 
+                # Build optional debate section for the prompt
+                debate_section = ""
+                if thesis_tension:
+                    debate_section = f"\n\nADDITIONAL CONTEXT — Thesis Debate:\nThe investment thesis was debated by opposing analysts.\nCore tension: {thesis_tension}"
+                    if strongest_bull:
+                        debate_section += f"\nStrongest bull point: {strongest_bull}"
+                    if strongest_bear:
+                        debate_section += f"\nStrongest bear point: {strongest_bear}"
+                    if unresolved_question:
+                        debate_section += f"\nUnresolved question: {unresolved_question}"
+                    if verdict_lean:
+                        debate_section += f"\nDebate lean: {verdict_lean}"
+                    if conviction_modifier:
+                        debate_section += f"\nConviction modifier: {conviction_modifier}"
+
                 prompt = f"""You are a trusted senior analyst writing a verdict for a long-horizon investor.
 
 TASK: Write a verdict for this exact situation:
@@ -122,7 +146,7 @@ TASK: Write a verdict for this exact situation:
 - Probability at {holding_period}yr: {prob_low_str} – {prob_high_str}
 - Price efficiency: {efficiency_verdict}
 - Stress verdict: {stress_verdict}
-- Macro regime: {macro_regime}{growth_bet_section}
+- Macro regime: {macro_regime}{growth_bet_section}{debate_section}
 
 NUMBER REGISTRY (only use these numbers — never invent others): {json.dumps(number_registry)}
 
@@ -134,7 +158,10 @@ RULES:
 5. If a stated_bet is provided, reference it in the verdict.
 6. If most_fragile_assumption is provided, name it as the key risk.
 7. If capital allocation warning is present, note the contradiction explicitly.
-8. Return ONLY valid JSON, no markdown.
+8. If conviction_modifier is "weakens", your verdict paragraph MUST acknowledge the specific bear point that weakened conviction.
+9. If conviction_modifier is "strengthens", acknowledge the specific bull point. If "unchanged", you may reference either or neither.
+10. If unresolved_question is provided, it MUST appear as a one-sentence note at the end of verdict_paragraph: "Key question: {unresolved_question}"
+11. Return ONLY valid JSON, no markdown.
 
 Return this JSON structure:
 {{

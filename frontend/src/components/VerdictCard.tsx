@@ -48,6 +48,12 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
   // Top 2 red flags
   const topRisks = data.red_flags_and_failure_modes.slice(0, 2);
 
+  const debate = data.thesis_debate;
+  const convictionModifierIcon = debate?.conviction_modifier === 'strengthens' ? '↑'
+    : debate?.conviction_modifier === 'weakens' ? '↓'
+    : debate?.conviction_modifier === 'unchanged' ? '—'
+    : null;
+
   return (
     <div className="w-full max-w-3xl bg-gray-900 border border-gray-700 rounded-2xl p-8 shadow-2xl">
       {/* Header row */}
@@ -60,7 +66,30 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
             {data.segment?.replace(/_/g, ' ')} · {data.data_quality} data quality
           </p>
         </div>
-        <ConfidenceBadge verdict={data.confidence_verdict} />
+        <div className="flex items-center gap-2">
+          <ConfidenceBadge verdict={data.confidence_verdict} />
+          {convictionModifierIcon && (
+            <div
+              className="relative group cursor-default"
+              title={debate?.thesis_tension ?? ''}
+            >
+              <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-sm font-bold border ${
+                debate?.conviction_modifier === 'strengthens'
+                  ? 'bg-green-950 text-green-300 border-green-700'
+                  : debate?.conviction_modifier === 'weakens'
+                  ? 'bg-red-950 text-red-300 border-red-700'
+                  : 'bg-gray-800 text-gray-400 border-gray-600'
+              }`}>
+                {convictionModifierIcon}
+              </span>
+              {debate?.thesis_tension && (
+                <div className="absolute right-0 top-full mt-1 z-10 hidden group-hover:block w-64 bg-gray-800 border border-gray-600 rounded-lg p-3 text-xs text-gray-300 shadow-xl">
+                  {debate.thesis_tension}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Trust / data health */}
@@ -169,6 +198,13 @@ export default function VerdictCard({ data, targetCagr, holdingPeriod }: Props) 
           <p className="text-gray-100 text-base leading-relaxed font-light">
             {data.verdict_paragraph}
           </p>
+        </div>
+      )}
+
+      {debate?.unresolved_question && (
+        <div className="mb-6 bg-blue-950/40 border border-blue-800/50 rounded-lg px-4 py-3">
+          <p className="text-xs text-blue-400 uppercase tracking-wider mb-1">Key question</p>
+          <p className="text-sm text-blue-200">{debate.unresolved_question}</p>
         </div>
       )}
 

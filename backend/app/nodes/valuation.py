@@ -7,10 +7,12 @@ All numbers come from prior state; current price is fetched fresh.
 Never crashes the pipeline — exceptions are caught, logged, and
 state["valuation"] is set to None.
 """
+import asyncio
 import logging
 import math
 from typing import Optional
 
+from app.config import settings
 from app.state import GraphState
 from app.utils import safe_float
 from app.data.yfinance_client import get_current_price
@@ -273,6 +275,62 @@ async def run(state: GraphState) -> dict:
             except Exception as e:
                 logger.warning("valuation: sentiment premium check failed: %s", e)
 
+        # Historical analog — Haiku identifies a comparable past situation
+        # Only fires when: API key set, valuation_confidence != "low", efficiency_verdict is meaningful
+        historical_analog: Optional[str] = None
+        if (
+            settings.anthropic_api_key
+            and valuation_confidence != "low"
+            and efficiency_verdict != "insufficient_data"
+            and not use_ps_fallback
+        ):
+            try:
+                from langchain_anthropic import ChatAnthropic
+                from langchain_core.messages import HumanMessage
+
+                fund_data = state.get("fundamentals") or {}
+                business_summary = (
+                    (fund_data.get("thesis") or {}).get("business_summary", "")
+                    if fund_data
+                    else ""
+                )
+                segment = state.get("segment", "unknown")
+
+                haiku_llm = ChatAnthropic(
+                    model="claude-haiku-4-5-20251001",
+                    api_key=settings.anthropic_api_key,
+                    max_tokens=150,
+                )
+                analog_prompt = f"""You are a senior equity analyst with deep market history knowledge.
+
+Company: {ticker} ({segment})
+{f'Business: {business_summary}' if business_summary else ''}
+Price efficiency: {efficiency_verdict.replace('_', ' ')}
+Implied 5yr growth: {f'{implied_growth*100:.1f}%' if implied_growth is not None else 'N/A'}
+Base case growth: {base_growth*100:.1f}%
+Sentiment premium: {'yes' if sentiment_premium_flag else 'no'}
+
+In ONE sentence (max 25 words), name a historical stock that was in a similar pricing
+situation — same efficiency verdict and similar growth/valuation dynamics.
+
+Format: "Similar to [TICKER] in [YEAR] — [one-clause reason]."
+Example: "Similar to MSFT in 2014 — mature business with steady cash flows but the market underpricing a platform transition."
+
+Return ONLY that one sentence. No preamble. No hedging."""
+
+                analog_response = await asyncio.wait_for(
+                    haiku_llm.ainvoke([HumanMessage(content=analog_prompt)]),
+                    timeout=15.0,
+                )
+                candidate = analog_response.content.strip()
+                # Only accept if it looks like the expected format and is short enough
+                if candidate.startswith("Similar to") and len(candidate) < 200:
+                    historical_analog = candidate
+            except asyncio.TimeoutError:
+                logger.warning("valuation: historical_analog timed out for %s", ticker)
+            except Exception as e:
+                logger.warning("valuation: historical_analog failed for %s: %s", ticker, e)
+
         # Valuation method summary (template, NOT LLM)
         valuation_method_summary = (
             f"Heuristic DCF + P/E framework. Base case uses {base_growth*100:.1f}% growth, "
@@ -303,7 +361,7 @@ async def run(state: GraphState) -> dict:
                     "efficiency_notes": efficiency_notes,
                     "sentiment_premium_flag": sentiment_premium_flag,
                     "sentiment_premium_notes": sentiment_premium_notes,
-                    "historical_analog": None,
+                    "historical_analog": historical_analog,
                 },
                 "valuation_confidence": valuation_confidence,
                 "valuation_notes": " ".join(valuation_notes) if valuation_notes else None,

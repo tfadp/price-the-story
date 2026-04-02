@@ -110,6 +110,63 @@ export default function DetailPanels({ data }: Props) {
           {!thesis && <p className="text-gray-500">Thesis data unavailable for this ticker.</p>}
         </Panel>
 
+        {/* The Debate */}
+        {data.thesis_debate && (
+          <Panel label="The Debate">
+            {data.thesis_debate.thesis_tension && (
+              <p className="text-center text-sm font-semibold text-gray-200 mb-4 px-2">
+                {data.thesis_debate.thesis_tension}
+              </p>
+            )}
+            <div className="flex flex-col gap-3">
+              {data.thesis_debate.bull_case && (
+                <div className="border-l-2 border-green-600 pl-4 py-1">
+                  <p className="text-xs text-green-400 mb-1 uppercase tracking-wider">Bull case</p>
+                  <p className="text-sm text-gray-300">{data.thesis_debate.bull_case}</p>
+                </div>
+              )}
+              {data.thesis_debate.bear_case && (
+                <div className="border-l-2 border-red-600 pl-4 py-1">
+                  <p className="text-xs text-red-400 mb-1 uppercase tracking-wider">Bear case</p>
+                  <p className="text-sm text-gray-300">{data.thesis_debate.bear_case}</p>
+                </div>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 items-center">
+              {data.thesis_debate.verdict_lean && (
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${
+                  data.thesis_debate.verdict_lean === 'bull'
+                    ? 'bg-green-950 text-green-300 border-green-700'
+                    : data.thesis_debate.verdict_lean === 'bear'
+                    ? 'bg-red-950 text-red-300 border-red-700'
+                    : 'bg-gray-800 text-gray-400 border-gray-600'
+                }`}>
+                  {data.thesis_debate.verdict_lean.replace(/_/g, ' ')}
+                </span>
+              )}
+              {data.thesis_debate.conviction_modifier && (
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border ${
+                  data.thesis_debate.conviction_modifier === 'strengthens'
+                    ? 'bg-green-950 text-green-300 border-green-700'
+                    : data.thesis_debate.conviction_modifier === 'weakens'
+                    ? 'bg-red-950 text-red-300 border-red-700'
+                    : 'bg-gray-800 text-gray-400 border-gray-600'
+                }`}>
+                  {data.thesis_debate.conviction_modifier === 'strengthens' ? '↑ conviction strengthened'
+                    : data.thesis_debate.conviction_modifier === 'weakens' ? '↓ conviction weakened'
+                    : '— conviction unchanged'}
+                </span>
+              )}
+            </div>
+            {data.thesis_debate.unresolved_question && (
+              <div className="mt-4 bg-blue-950/40 border border-blue-800/50 rounded-lg px-4 py-3">
+                <p className="text-xs text-blue-400 uppercase tracking-wider mb-1">Unresolved question</p>
+                <p className="text-sm text-blue-200">{data.thesis_debate.unresolved_question}</p>
+              </div>
+            )}
+          </Panel>
+        )}
+
         {/* What Breaks It */}
         <Panel label="What Breaks It">
           {stress_test ? (

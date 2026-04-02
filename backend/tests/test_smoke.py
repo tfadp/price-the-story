@@ -73,13 +73,18 @@ def test_analyze_default_cagr():
     assert r.status_code == 200
 
 
-def test_large_cap_news_sentiment_is_stubbed_partial():
+def test_large_cap_news_sentiment_is_no_longer_pending_phase2():
+    """After Phase D, news_sentiment must not return the old pending_phase2 stub.
+
+    Phase C may populate sentiment with filings data (so sentiment can be non-None).
+    Phase D replaces the stub — source must be anything except pending_phase2.
+    """
     r = client.post("/analyze-ticker", json={"ticker": "AAPL"})
     assert r.status_code == 200
     data = r.json()
-    assert data.get("sentiment") is None
-    assert data["section_statuses"]["news_sentiment"]["status"] == "partial"
-    assert data["section_statuses"]["news_sentiment"]["source"] == "pending_phase2"
+    ns_status = data["section_statuses"]["news_sentiment"]
+    assert ns_status["source"] != "pending_phase2"
+    assert ns_status["status"] in ("ok", "partial")
 
 
 def test_identical_requests_reuse_cached_analysis_result():
@@ -388,3 +393,59 @@ def test_pipeline_500_does_not_leak_internals():
         body = r.json()
         assert "secret internal detail" not in body.get("detail", "")
         assert "Analysis failed" in body.get("detail", "")
+
+
+# ---------------------------------------------------------------------------
+# Node 10.5: Thesis Debate Engine
+# ---------------------------------------------------------------------------
+
+def test_thesis_debate_section_status_present_in_response():
+    """After a full pipeline run, section_statuses must include thesis_debate."""
+    r = client.post("/analyze-ticker", json={"ticker": "AAPL"})
+    assert r.status_code == 200
+    data = r.json()
+    assert "thesis_debate" in data["section_statuses"]
+    status = data["section_statuses"]["thesis_debate"]["status"]
+    assert status in ("ok", "partial", "failed", "skipped")
+
+
+def test_thesis_debate_skipped_for_small_cap_high_vol():
+    """Small-cap high-vol tickers skip thesis_debate and return status=partial/source=skipped."""
+    with (
+        patch(
+            "app.nodes.classifier.get_company_facts",
+            new_callable=AsyncMock,
+            return_value={"exchange": "NMS", "market_cap": 750_000_000, "name": "TinyCo"},
+        ),
+        patch(
+            "app.nodes.classifier.get_snapshot_price",
+            new_callable=AsyncMock,
+            return_value=4.25,
+        ),
+        patch(
+            "app.nodes.classifier.get_market_cap",
+            new_callable=AsyncMock,
+            return_value=750_000_000,
+        ),
+        patch(
+            "app.nodes.classifier.get_price_history",
+            new_callable=AsyncMock,
+            return_value={"history": []},
+        ),
+    ):
+        r = client.post("/analyze-ticker", json={"ticker": "TINY"})
+
+    assert r.status_code == 200
+    data = r.json()
+    # probability_engine is disabled for small_cap_high_vol — so debate skips too
+    assert data["section_statuses"]["thesis_debate"]["status"] in ("partial", "failed")
+
+
+def test_thesis_debate_node_does_not_crash_pipeline():
+    """thesis_debate node failure must not crash the pipeline — pm_synthesis still runs."""
+    r = client.post("/analyze-ticker", json={"ticker": "AAPL"})
+    assert r.status_code == 200
+    data = r.json()
+    # pm_synthesis must have run regardless of thesis_debate outcome
+    assert "pm_synthesis" in data["section_statuses"]
+    assert data["section_statuses"]["pm_synthesis"]["status"] in ("ok", "failed")

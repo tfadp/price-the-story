@@ -114,6 +114,18 @@ class HallucinationStatus(str, Enum):
     blocked = "blocked"
 
 
+class VerdictLean(str, Enum):
+    bull = "bull"
+    bear = "bear"
+    genuinely_uncertain = "genuinely_uncertain"
+
+
+class ConvictionModifier(str, Enum):
+    strengthens = "strengthens"
+    weakens = "weakens"
+    unchanged = "unchanged"
+
+
 # ---------------------------------------------------------------------------
 # Request
 # ---------------------------------------------------------------------------
@@ -458,6 +470,17 @@ class HallucinationCheck(BaseModel):
     overall_status: HallucinationStatus = HallucinationStatus.clean
 
 
+class ThesisDebate(BaseModel):
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    thesis_tension: Optional[str] = None
+    strongest_bull_point: Optional[str] = None
+    strongest_bear_point: Optional[str] = None
+    unresolved_question: Optional[str] = None
+    verdict_lean: Optional[VerdictLean] = None
+    conviction_modifier: Optional[ConvictionModifier] = None
+
+
 # ---------------------------------------------------------------------------
 # Top-level response
 # ---------------------------------------------------------------------------
@@ -481,6 +504,7 @@ class AnalyzeResponse(BaseModel):
     macro_and_crowd: Optional[MacroAndCrowd] = None
     probability_engine: Optional[ProbabilityEngine] = None
     stress_test: Optional[StressTest] = None
+    thesis_debate: Optional[ThesisDebate] = None
     red_flags_and_failure_modes: list[RedFlag] = []
 
     section_statuses: dict[str, SectionStatusDetail] = {}
@@ -541,6 +565,7 @@ PROGRESS_STAGES = [
     ("Analyzing the growth story", "themes",             50),
     ("Checking the price",         "valuation",          65),
     ("Running stress scenarios",   "probability_engine", 80),
+    ("Debating the thesis",         "thesis_debate",      83),
     ("Writing verdict",            "pm_synthesis",       95),
 ]
 

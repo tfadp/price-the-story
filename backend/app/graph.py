@@ -23,6 +23,7 @@ from app.nodes import (
     macro,
     polymarket,
     probability_engine,
+    thesis_debate,
     pm_synthesis,
 )
 
@@ -54,13 +55,15 @@ def build_graph() -> StateGraph:
     builder.add_node("node_macro", macro.run)
     builder.add_node("node_polymarket", polymarket.run)
     builder.add_node("node_probability_engine", probability_engine.run)
+    builder.add_node("node_thesis_debate", thesis_debate.run)
     builder.add_node("node_pm_synthesis", pm_synthesis.run)
 
     builder.add_edge(START, "node_classifier")
     for node_name in PARALLEL_NODES:
         builder.add_edge("node_classifier", node_name)
         builder.add_edge(node_name, "node_probability_engine")
-    builder.add_edge("node_probability_engine", "node_pm_synthesis")
+    builder.add_edge("node_probability_engine", "node_thesis_debate")
+    builder.add_edge("node_thesis_debate", "node_pm_synthesis")
     builder.add_edge("node_pm_synthesis", END)
 
     return builder.compile()

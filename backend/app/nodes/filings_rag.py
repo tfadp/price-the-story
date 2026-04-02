@@ -1,5 +1,5 @@
 """
-Node 6: Filings RAG + Growth Bet Extraction (Phase B).
+Node 6: Filings RAG + Growth Bet Extraction (Phase B) + Phase C extensions.
 
 Pipeline:
   1. Fetch 10-K MD&A + Risk Factors (EdgarTools), 10-Q MD&A (EdgarTools),
@@ -9,6 +9,10 @@ Pipeline:
   3. Run 4 RAG queries to surface growth bet language
   4. Deterministic words-vs-numbers check using Fundamentals node output
   5. Claude Sonnet synthesizes a 5-8 item assumption sheet
+  Phase C additions (best-effort, additive):
+  6. Fetch risk factor evolution (current vs prior 10-K)
+  7. Fetch insider Form 4 transactions (last 90 days)
+  8. Fetch institutional 13F top holders
 
 Returns delta: {"filings_rag": {...}, "section_statuses": {...}}
 
@@ -23,7 +27,13 @@ from typing import Any
 from typing import Optional
 
 from app.config import settings
-from app.data.edgar_client import get_annual_filing_text, get_quarterly_filing_text
+from app.data.edgar_client import (
+    get_annual_filing_text,
+    get_institutional_holders,
+    get_insider_transactions,
+    get_quarterly_filing_text,
+    get_risk_factor_evolution,
+)
 from app.data.finnhub_client import get_earnings_transcripts
 from app.state import GraphState
 from app.utils import safe_float
@@ -43,6 +53,12 @@ _GROWTH_BET_QUERIES = [
     "segments products geographies management is investing expanding",
     "capital allocation R&D capex priorities investment areas",
     "analyst pushback growth plan Q&A management response confidence",
+]
+
+# Phase C — RAG queries run against risk factor text to identify evolution
+_RISK_EVOLUTION_QUERIES = [
+    "new risks added emerging threats competitive landscape changes",
+    "risks removed resolved mitigated management addressed concerns",
 ]
 
 _PARTIAL_STATUS = {
@@ -294,6 +310,167 @@ async def _build_assumption_sheet(
 
 
 # ---------------------------------------------------------------------------
+# Phase C helpers
+# ---------------------------------------------------------------------------
+
+def _embed_risk_text(collection: Any, ticker: str, current_text: str, prior_text: str) -> None:
+    """Embed current and prior year risk factor text into ChromaDB.
+
+    Uses distinct source tags so RAG queries can target just the risk sections.
+    We upsert, so re-running is safe.
+    """
+    def _add(text: str, source_tag: str) -> None:
+        if not text:
+            return
+        chunks = _chunk_text(text)
+        ids = [_doc_id(ticker, source_tag, i) for i in range(len(chunks))]
+        metas = [{"ticker": ticker, "source": source_tag, "chunk": i} for i in range(len(chunks))]
+        collection.upsert(documents=chunks, ids=ids, metadatas=metas)
+
+    _add(current_text, "risk_current")
+    _add(prior_text, "risk_prior")
+
+
+def _rag_query_risk(collection: Any, ticker: str, query: str, source_tag: str) -> list[str]:
+    """Run a risk-focused RAG query filtered to a specific source tag.
+
+    Returns up to 5 short text snippets from the matching chunks.
+    """
+    try:
+        results = collection.query(
+            query_texts=[query],
+            n_results=5,
+            where={"$and": [{"ticker": {"$eq": ticker}}, {"source": {"$eq": source_tag}}]},
+        )
+        docs = (results.get("documents") or [[]])[0]
+        # Return non-empty snippets capped at 200 chars each for compactness
+        return [d[:200].strip() for d in docs if d.strip()]
+    except Exception as e:
+        logger.warning("filings_rag: risk RAG query failed: %s", e)
+        return []
+
+
+def _build_risk_evolution(
+    collection: Any,
+    ticker: str,
+    risk_data: dict,
+) -> Optional[dict]:
+    """Produce a FilingsRiskEvolution-shaped dict from risk RAG queries.
+
+    Embeds the current and prior risk text, runs both evolution queries,
+    and assembles the result.  Returns None if data is unavailable or
+    if both queries yield nothing.
+    """
+    if not risk_data.get("available"):
+        return None
+
+    try:
+        _embed_risk_text(
+            collection,
+            ticker,
+            risk_data.get("current_risks_text", ""),
+            risk_data.get("prior_risks_text", ""),
+        )
+
+        new_risk_snippets = _rag_query_risk(collection, ticker, _RISK_EVOLUTION_QUERIES[0], "risk_current")
+        removed_risk_snippets = _rag_query_risk(collection, ticker, _RISK_EVOLUTION_QUERIES[1], "risk_prior")
+
+        if not new_risk_snippets and not removed_risk_snippets:
+            return None
+
+        # Build a brief summary describing what we found
+        parts = []
+        if new_risk_snippets:
+            parts.append(f"{len(new_risk_snippets)} potential new or escalated risk area(s) identified in current 10-K risk factors.")
+        if removed_risk_snippets:
+            parts.append(f"{len(removed_risk_snippets)} risk area(s) appear reduced or resolved vs prior year.")
+        if not risk_data.get("prior_risks_text"):
+            parts.append("Only one year of 10-K available; year-over-year comparison not possible.")
+
+        return {
+            "summary": " ".join(parts) if parts else None,
+            "notable_new_risks": new_risk_snippets[:5],
+            "risks_downgraded_or_removed": removed_risk_snippets[:3],
+        }
+    except Exception as e:
+        logger.warning("filings_rag: _build_risk_evolution failed for %s: %s", ticker, e)
+        return None
+
+
+def _aggregate_insider_activity(transactions: list[dict]) -> Optional[dict]:
+    """Aggregate raw Form 4 transactions into an InsiderSummary-shaped dict.
+
+    net_activity: "net_buying"  if buy shares > sell shares by any margin
+                  "net_selling" if sell shares > buy shares by any margin
+                  "neutral"     if no buys or sells (only grants/unknowns)
+    signal_strength: "strong"   if net imbalance > 3x the smaller side
+                     "moderate" if net imbalance > 1.5x
+                     "weak"     otherwise
+    """
+    if not transactions:
+        return None
+
+    buy_shares = 0.0
+    sell_shares = 0.0
+    notable: list[dict] = []
+
+    for txn in transactions:
+        shares = txn.get("shares") or 0.0
+        txn_type = txn.get("transaction_type", "unknown")
+        if txn_type == "buy":
+            buy_shares += shares
+        elif txn_type == "sell":
+            sell_shares += shares
+
+        # Surface buy/sell transactions as notable (skip grants / unknowns)
+        if txn_type in ("buy", "sell") and shares:
+            notable.append(txn)
+
+    # Determine net activity
+    if buy_shares == 0 and sell_shares == 0:
+        net_activity = "neutral"
+        signal_strength = "weak"
+    elif buy_shares >= sell_shares:
+        net_activity = "net_buying"
+        larger = buy_shares
+        smaller = sell_shares if sell_shares > 0 else 1.0
+        ratio = larger / smaller
+        signal_strength = "strong" if ratio > 3.0 else ("moderate" if ratio > 1.5 else "weak")
+    else:
+        net_activity = "net_selling"
+        larger = sell_shares
+        smaller = buy_shares if buy_shares > 0 else 1.0
+        ratio = larger / smaller
+        signal_strength = "strong" if ratio > 3.0 else ("moderate" if ratio > 1.5 else "weak")
+
+    return {
+        "net_activity": net_activity,
+        "lookback_days": 90,
+        "notable_transactions": notable[:10],
+        "signal_strength": signal_strength,
+    }
+
+
+def _build_institutional_summary(holders_data: dict) -> Optional[dict]:
+    """Map get_institutional_holders output to InstitutionalSummary-shaped dict.
+
+    Returns None if data is unavailable so the field stays null in the response.
+    """
+    if not holders_data.get("available"):
+        return None
+
+    top_holders = holders_data.get("top_holders") or []
+    if not top_holders:
+        return None
+
+    return {
+        "top_holders": top_holders,
+        "notable_changes": [],   # not available from a single 13F snapshot
+        "tier1_activity": None,  # would require multi-quarter diff; out of scope here
+    }
+
+
+# ---------------------------------------------------------------------------
 # Node entry point
 # ---------------------------------------------------------------------------
 
@@ -315,15 +492,32 @@ async def run(state: GraphState) -> dict:
             }
 
         # ------------------------------------------------------------------
-        # Step 1 — Fetch filings and transcripts (all in threads, parallel)
+        # Step 1 — Fetch filings, transcripts, and Phase C data (all parallel)
         # ------------------------------------------------------------------
         annual_fut = asyncio.to_thread(get_annual_filing_text, ticker)
         quarterly_fut = asyncio.to_thread(get_quarterly_filing_text, ticker)
         transcripts_fut = asyncio.to_thread(get_earnings_transcripts, ticker, 4)
+        risk_evolution_fut = asyncio.to_thread(get_risk_factor_evolution, ticker)
+        insider_fut = asyncio.to_thread(get_insider_transactions, ticker)
+        institutional_fut = asyncio.to_thread(get_institutional_holders, ticker)
 
-        annual, quarterly, transcripts = await asyncio.gather(
-            annual_fut, quarterly_fut, transcripts_fut
+        results = await asyncio.gather(
+            annual_fut,
+            quarterly_fut,
+            transcripts_fut,
+            risk_evolution_fut,
+            insider_fut,
+            institutional_fut,
+            return_exceptions=True,
         )
+
+        # Unpack — replace exceptions with safe fallbacks
+        annual = results[0] if not isinstance(results[0], BaseException) else {}
+        quarterly = results[1] if not isinstance(results[1], BaseException) else {}
+        transcripts = results[2] if not isinstance(results[2], BaseException) else []
+        risk_evolution_raw = results[3] if not isinstance(results[3], BaseException) else {"available": False}
+        insider_raw = results[4] if not isinstance(results[4], BaseException) else []
+        institutional_raw = results[5] if not isinstance(results[5], BaseException) else {"available": False}
 
         has_any_text = (
             annual.get("mda") or annual.get("risk_factors")
@@ -375,6 +569,31 @@ async def run(state: GraphState) -> dict:
         fragile_assumptions = [a for a in assumption_sheet if a.get("fragility") == "fragile"]
         most_fragile = fragile_assumptions[0].get("assumption") if fragile_assumptions else None
 
+        # ------------------------------------------------------------------
+        # Phase C — Risk evolution, insider activity, institutional holders
+        # These are best-effort; failures do not affect the main result.
+        # ------------------------------------------------------------------
+        filings_risk_evolution: Optional[dict] = None
+        insider_summary: Optional[dict] = None
+        institutional_summary: Optional[dict] = None
+
+        try:
+            filings_risk_evolution = await asyncio.to_thread(
+                _build_risk_evolution, collection, ticker, risk_evolution_raw
+            )
+        except Exception as e:
+            logger.warning("filings_rag: risk evolution processing failed for %s: %s", ticker, e)
+
+        try:
+            insider_summary = _aggregate_insider_activity(insider_raw)
+        except Exception as e:
+            logger.warning("filings_rag: insider aggregation failed for %s: %s", ticker, e)
+
+        try:
+            institutional_summary = _build_institutional_summary(institutional_raw)
+        except Exception as e:
+            logger.warning("filings_rag: institutional summary failed for %s: %s", ticker, e)
+
         result = {
             "filings_rag": {
                 "stated_bet": stated_bet,
@@ -388,6 +607,10 @@ async def run(state: GraphState) -> dict:
                     "transcript_count": len(transcripts),
                     "chunks_embedded": total_chunks,
                 },
+                # Phase C additions
+                "filings_risk_evolution": filings_risk_evolution,
+                "insider_summary": insider_summary,
+                "institutional_summary": institutional_summary,
             },
             "section_statuses": {"filings_rag": _OK_STATUS},
         }

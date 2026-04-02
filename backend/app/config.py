@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     analysis_cache_ttl_s: int = 300
     app_version: str = "0.1.0"
     log_level: str = "INFO"
+    thesis_debate_rounds: int = 1
 
 
 settings = Settings()

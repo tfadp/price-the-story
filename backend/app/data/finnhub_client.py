@@ -7,6 +7,7 @@ Free tier: 60 req/min. No daily cap.
 All calls are synchronous (finnhub-python is sync) — callers use asyncio.to_thread.
 """
 import logging
+from datetime import date, timedelta
 from typing import Optional
 
 from app.config import settings
@@ -80,4 +81,45 @@ def get_earnings_transcripts(ticker: str, limit: int = 4) -> list[dict]:
 
     except Exception as e:
         logger.warning("finnhub: get_earnings_transcripts failed for %s: %s", ticker, e)
+        return []
+
+
+def get_company_news(ticker: str, lookback_days: int = 30) -> list[dict]:
+    """Return recent company news articles from Finnhub.
+
+    Each item is a dict with keys: headline, summary, datetime (unix int), source, url.
+    Returns [] when Finnhub is unavailable, the API key is absent, or the ticker has no news.
+    Sorted newest-first, capped at 50 articles.
+    """
+    try:
+        client = _get_client()
+    except RuntimeError as e:
+        logger.info("finnhub: %s, skipping news for %s", e, ticker)
+        return []
+    if not client:
+        logger.info("finnhub: no API key configured, skipping news for %s", ticker)
+        return []
+
+    try:
+        from_date = (date.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        to_date = date.today().strftime("%Y-%m-%d")
+        raw = client.company_news(ticker, _from=from_date, to=to_date) or []
+
+        articles = []
+        for item in raw:
+            articles.append({
+                "headline": item.get("headline", ""),
+                "summary": item.get("summary", ""),
+                "datetime": item.get("datetime", 0),
+                "source": item.get("source", ""),
+                "url": item.get("url", ""),
+            })
+
+        # Newest first, cap at 50
+        articles.sort(key=lambda a: a["datetime"], reverse=True)
+        logger.info("finnhub: fetched %d news articles for %s", len(articles[:50]), ticker)
+        return articles[:50]
+
+    except Exception as e:
+        logger.warning("finnhub: get_company_news failed for %s: %s", ticker, e)
         return []

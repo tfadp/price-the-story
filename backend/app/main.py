@@ -36,6 +36,7 @@ from app.models import (
     MacroAndCrowd,
     ProbabilityEngine,
     StressTest,
+    ThesisDebate,
     RedFlag,
     PredictionRecord,
     LeaderboardRow,
@@ -347,6 +348,10 @@ def _build_prediction_dict(state: dict, request: AnalyzeRequest) -> dict:
         "stated_bet": None,
         "words_vs_numbers": None,
         "efficiency_verdict": efficiency_verdict,
+        "verdict_lean": (state.get("thesis_debate") or {}).get("verdict_lean"),
+        "conviction_modifier": (state.get("thesis_debate") or {}).get("conviction_modifier"),
+        "thesis_tension": (state.get("thesis_debate") or {}).get("thesis_tension"),
+        "unresolved_question": (state.get("thesis_debate") or {}).get("unresolved_question"),
     }
 
 
@@ -479,7 +484,12 @@ def _state_to_response(state: dict, request: AnalyzeRequest) -> AnalyzeResponse:
     stress = state.get("stress_test") or {}
     fund = state.get("fundamentals") or {}
     val = state.get("valuation") or {}
-    sentiment_data = state.get("news_sentiment") or {}
+    sentiment_data = dict(state.get("news_sentiment") or {})
+    filings = state.get("filings_rag") or {}
+    # Phase C: merge filings-derived sentiment fields into sentiment_data
+    for _key in ("filings_risk_evolution", "insider_summary", "institutional_summary"):
+        if filings.get(_key) is not None:
+            sentiment_data[_key] = filings[_key]
     analysts_data = state.get("analyst_estimates") or {}
     macro_data = state.get("macro") or {}
 
@@ -537,6 +547,11 @@ def _state_to_response(state: dict, request: AnalyzeRequest) -> AnalyzeResponse:
         macro_and_crowd=macro_obj,
         probability_engine=prob_obj,
         stress_test=stress_obj,
+        thesis_debate=(
+            ThesisDebate(**state["thesis_debate"])
+            if state.get("thesis_debate")
+            else None
+        ),
         red_flags_and_failure_modes=red_flags,
         section_statuses=section_statuses,
         hallucination_check=hallucination_check,
